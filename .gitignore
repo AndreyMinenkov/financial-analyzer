@@ -1,0 +1,13 @@
+# Временные файлы
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Файлы проекта
+temp.html
+.DS_Store
+
+# Папка git
+.git/
