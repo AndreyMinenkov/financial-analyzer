@@ -141,6 +141,8 @@ header h1 i {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
 }
 
 .page-header h2 {
@@ -156,9 +158,122 @@ header h1 i {
     color: var(--primary);
 }
 
+/* Единообразные кнопки действий */
 .header-actions {
     display: flex;
     gap: 8px;
+    justify-content: flex-end;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* Секция действий для сверки - на одной линии с кнопкой Контрагенты */
+.reconciliation-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+}
+
+/* Единый стиль для всех кнопок */
+.btn {
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s ease;
+    background: var(--surface);
+    color: var(--text-secondary);
+    line-height: 1;
+    white-space: nowrap;
+    box-shadow: var(--shadow-sm);
+}
+
+.btn i {
+    font-size: 14px;
+}
+
+/* Эффект при наведении - для всех кнопок одинаковый */
+.btn:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+    background: var(--surface-hover);
+    border-color: var(--border-dark);
+    color: var(--text-primary);
+}
+
+/* Активные состояния (primary, success и т.д.) - только цвет фона меняется */
+.btn-primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--primary-dark);
+    border-color: var(--primary-dark);
+    color: white;
+}
+
+.btn-success {
+    background: var(--success);
+    border-color: var(--success);
+    color: white;
+}
+
+.btn-success:hover {
+    background: #0ca678;
+    border-color: #0ca678;
+    color: white;
+}
+
+.btn-secondary {
+    background: var(--secondary);
+    border-color: var(--secondary);
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #4b5563;
+    border-color: #4b5563;
+    color: white;
+}
+
+.btn-danger {
+    background: var(--error);
+    border-color: var(--error);
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #dc2626;
+    border-color: #dc2626;
+    color: white;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+    transform: none;
+    box-shadow: none;
+}
+
+/* Маленькие кнопки для списка контрагентов */
+.btn-sm {
+    padding: 4px 8px;
+    font-size: 11px;
+}
+
+.btn-sm i {
+    font-size: 11px;
 }
 
 /* Секция загрузки */
@@ -320,6 +435,7 @@ header h1 i {
     display: flex;
     gap: 8px;
     margin-top: 20px;
+    justify-content: flex-end;
 }
 
 /* Статистика */
@@ -485,14 +601,6 @@ header h1 i {
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
-/* Действия со сверкой */
-.reconciliation-actions {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 24px;
-    flex-wrap: wrap;
-}
-
 /* Лог сверки */
 .reconciliation-log {
     background: var(--surface);
@@ -569,87 +677,6 @@ header h1 i {
     text-align: center;
 }
 
-/* Кнопки */
-.btn {
-    padding: 8px 16px;
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.2s;
-    background: var(--surface);
-    border-color: var(--border);
-    color: var(--text-secondary);
-}
-
-.btn i {
-    font-size: 14px;
-}
-
-.btn:hover {
-    background: var(--surface-hover);
-    border-color: var(--border-dark);
-    color: var(--text-primary);
-}
-
-.btn-primary {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: white;
-}
-
-.btn-primary:hover {
-    background: var(--primary-dark);
-    border-color: var(--primary-dark);
-    color: white;
-}
-
-.btn-success {
-    background: var(--success);
-    border-color: var(--success);
-    color: white;
-}
-
-.btn-success:hover {
-    background: #0ca678;
-    border-color: #0ca678;
-    color: white;
-}
-
-.btn-warning {
-    background: var(--warning);
-    border-color: var(--warning);
-    color: white;
-}
-
-.btn-warning:hover {
-    background: #d97706;
-    border-color: #d97706;
-    color: white;
-}
-
-.btn-secondary {
-    background: var(--secondary);
-    border-color: var(--secondary);
-    color: white;
-}
-
-.btn-secondary:hover {
-    background: #4b5563;
-    border-color: #4b5563;
-    color: white;
-}
-
-.btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    pointer-events: none;
-}
-
 /* Таблицы */
 .table-container {
     border: 1px solid var(--border);
@@ -723,6 +750,37 @@ header h1 i {
     text-align: center;
     padding: 32px;
     font-style: italic;
+}
+
+/* Подвал таблицы */
+.table-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+}
+
+.summary {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 13px;
+}
+
+.summary-label {
+    color: var(--text-secondary);
+}
+
+.summary-value {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+}
+
+.actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
 }
 
 /* Модальное окно */
@@ -922,6 +980,55 @@ header h1 i {
     to { transform: rotate(360deg); }
 }
 
+/* Стили для управления контрагентами */
+.contractors-list {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px;
+    margin-bottom: 16px;
+}
+
+.contractors-list .empty-message {
+    color: var(--text-tertiary);
+    font-size: 13px;
+    text-align: center;
+    padding: 16px;
+    font-style: italic;
+}
+
+.contractor-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.contractor-item:last-child {
+    border-bottom: none;
+}
+
+.contractor-name {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+/* Стили для модального окна контрагентов */
+#contractorsModal .modal-content {
+    width: 500px;
+    max-width: 90%;
+}
+
+#contractorsModal .section-description {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
 /* Адаптивность */
 @media (max-width: 1200px) {
     .container {
@@ -942,8 +1049,14 @@ header h1 i {
         flex-direction: column;
     }
 
-    .header-actions {
+    .page-header {
         flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .header-actions, .reconciliation-actions {
+        width: 100%;
+        justify-content: flex-start;
     }
 
     .stats-grid {

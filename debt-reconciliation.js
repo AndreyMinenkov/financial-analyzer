@@ -9,13 +9,17 @@ class DebtReconciliationManager {
         this.receiptsData = [];        // данные из файла 2 (только с датами)
         this.processedDocuments = [];   // логи обработанных документов
         this.currentDate = new Date();
+        
+        // Загружаем список целевых контрагентов из localStorage или используем стандартный
+        this.loadTargetContractors();
+        
         this.stats = {
             totalDocuments: 0,
             foundDocuments: 0,
             updatedDocuments: 0,
             errors: []
         };
-        
+
         // Индексы колонок в файле 1
         this.COLUMNS = {
             DOCUMENT_NAME: 0,      // A
@@ -29,9 +33,56 @@ class DebtReconciliationManager {
             INTERVAL_90_179: 23,   // X - 90-179 дней
             INTERVAL_180_PLUS: 24, // Y - 180+ дней
         };
-        
-        // Целевые контрагенты
-        this.TARGET_CONTRAGENTS = ['ВАНКОРНЕФТЬ АО', 'РН-Ванкор ООО'];
+    }
+
+    // Загрузка списка целевых контрагентов из localStorage
+    loadTargetContractors() {
+        const stored = localStorage.getItem('targetContractors');
+        if (stored) {
+            try {
+                this.TARGET_CONTRAGENTS = JSON.parse(stored);
+                console.log('Загружен список контрагентов:', this.TARGET_CONTRAGENTS);
+            } catch (e) {
+                console.error('Ошибка загрузки списка контрагентов', e);
+                this.TARGET_CONTRAGENTS = ['ВАНКОРНЕФТЬ АО', 'РН-Ванкор ООО'];
+            }
+        } else {
+            // Стандартный список по умолчанию
+            this.TARGET_CONTRAGENTS = ['ВАНКОРНЕФТЬ АО', 'РН-Ванкор ООО'];
+        }
+    }
+
+    // Сохранение списка целевых контрагентов в localStorage
+    saveTargetContractors(contractors) {
+        this.TARGET_CONTRAGENTS = contractors.filter(c => c.trim() !== '');
+        localStorage.setItem('targetContractors', JSON.stringify(this.TARGET_CONTRAGENTS));
+        console.log('Сохранен список контрагентов:', this.TARGET_CONTRAGENTS);
+    }
+
+    // Получение списка целевых контрагентов
+    getTargetContractors() {
+        return [...this.TARGET_CONTRAGENTS];
+    }
+
+    // Добавление контрагента в список
+    addTargetContractor(contractor) {
+        if (contractor && contractor.trim() !== '' && !this.TARGET_CONTRAGENTS.includes(contractor.trim())) {
+            this.TARGET_CONTRAGENTS.push(contractor.trim());
+            this.saveTargetContractors(this.TARGET_CONTRAGENTS);
+            return true;
+        }
+        return false;
+    }
+
+    // Удаление контрагента из списка
+    removeTargetContractor(contractor) {
+        const index = this.TARGET_CONTRAGENTS.indexOf(contractor);
+        if (index !== -1) {
+            this.TARGET_CONTRAGENTS.splice(index, 1);
+            this.saveTargetContractors(this.TARGET_CONTRAGENTS);
+            return true;
+        }
+        return false;
     }
 
     formatDate(date) {
@@ -66,28 +117,28 @@ class DebtReconciliationManager {
         console.log('Загрузка файла реестра ДЗ:', file.name);
         try {
             const arrayBuffer = await this.readFileAsArrayBuffer(file);
-            
-            const workbook = XLSX.read(arrayBuffer, { 
+
+            const workbook = XLSX.read(arrayBuffer, {
                 type: 'array',
                 cellDates: true,
                 raw: true
             });
-            
+
             const sheetName = workbook.SheetNames[0];
             const worksheet = workbook.Sheets[sheetName];
-            
-            this.debtData = XLSX.utils.sheet_to_json(worksheet, { 
+
+            this.debtData = XLSX.utils.sheet_to_json(worksheet, {
                 header: 1,
                 defval: null,
                 raw: true
             });
-            
+
             this.debtHeaders = this.debtData[0] || [];
             this.debtFile = file;
             this.debtFileName = file.name;
-            
+
             console.log('Файл загружен, строк:', this.debtData.length);
-            
+
             return {
                 success: true,
                 message: 'Загружено ' + this.debtData.length + ' строк',
@@ -106,17 +157,17 @@ class DebtReconciliationManager {
         console.log('Загрузка файла поступлений:', file.name);
         try {
             const arrayBuffer = await this.readFileAsArrayBuffer(file);
-            
-            const workbook = XLSX.read(arrayBuffer, { 
+
+            const workbook = XLSX.read(arrayBuffer, {
                 type: 'array',
                 cellDates: true,
                 raw: true
             });
-            
+
             const sheetName = workbook.SheetNames[0];
             const worksheet = workbook.Sheets[sheetName];
-            
-            const rows = XLSX.utils.sheet_to_json(worksheet, { 
+
+            const rows = XLSX.utils.sheet_to_json(worksheet, {
                 header: 1,
                 defval: null,
                 raw: true
@@ -127,7 +178,7 @@ class DebtReconciliationManager {
             }
 
             const headers = rows[0] || [];
-            
+
             const docNameCol = this.findColumnIndex(headers, 'Документ реализации');
             const dateCol = this.findColumnIndex(headers, 'Оплата по подписанию');
             const amountCol = this.findColumnIndex(headers, 'Сумма');
@@ -149,7 +200,7 @@ class DebtReconciliationManager {
 
             // Собираем записи с датами
             this.receiptsData = [];
-            
+
             for (let i = 1; i < rows.length; i++) {
                 const row = rows[i];
                 if (!row || row.length === 0) continue;
@@ -165,12 +216,12 @@ class DebtReconciliationManager {
                     if (docNameCol !== -1 && row[docNameCol]) {
                         docName = String(row[docNameCol]).trim();
                     }
-                    
+
                     let amount = 0;
                     if (amountCol !== -1 && row[amountCol]) {
                         amount = this.parseExcelNumber(row[amountCol]);
                     }
-                    
+
                     let kontragent = '';
                     if (kontragentCol !== -1 && row[kontragentCol]) {
                         kontragent = String(row[kontragentCol]).trim();
@@ -279,10 +330,10 @@ class DebtReconciliationManager {
         if (!row || row.length === 0) return false;
         const value = row[this.COLUMNS.DOCUMENT_NAME];
         if (!value) return false;
-        
+
         const str = String(value);
-        return str.indexOf('Акт') !== -1 || 
-               str.indexOf('Реализация') !== -1 || 
+        return str.indexOf('Акт') !== -1 ||
+               str.indexOf('Реализация') !== -1 ||
                str.indexOf('Корректировка') !== -1 ||
                str.indexOf('Поступление') !== -1;
     }
@@ -292,10 +343,10 @@ class DebtReconciliationManager {
         for (let i = rowIndex - 1; i >= 14; i--) {  // начиная с 14 строки (после заголовков)
             const row = this.debtData[i];
             if (!row) continue;
-            
+
             const cellValue = row[0]; // колонка A
             if (!cellValue) continue;
-            
+
             const strVal = String(cellValue).trim();
             // Проверяем, является ли строка контрагентом (ООО или АО, но не ДТ)
             if ((strVal.includes('ООО') || strVal.includes('АО')) && !strVal.startsWith('ДТ ')) {
@@ -328,10 +379,11 @@ class DebtReconciliationManager {
         });
 
         console.log('Создана карта документов из файла поступлений, размер:', receiptsMap.size);
+        console.log('Целевые контрагенты:', this.TARGET_CONTRAGENTS);
 
         const today = this.currentDate;
         const self = this;
-        
+
         // Проходим по всем строкам файла 1 и ищем документы
         for (let i = 0; i < this.debtData.length; i++) {
             const row = this.debtData[i];
@@ -339,32 +391,32 @@ class DebtReconciliationManager {
 
             if (this.isDocumentRow(row)) {
                 this.stats.totalDocuments++;
-                
+
                 const docName = String(row[this.COLUMNS.DOCUMENT_NAME] || '').trim();
-                
+
                 // Находим контрагента для этого документа
                 const kontragent = this.findKontragentForRow(i);
-                
+
                 // Проверяем, входит ли контрагент в целевой список
-                const isTargetKontragent = kontragent && this.TARGET_CONTRAGENTS.some(target => 
+                const isTargetKontragent = kontragent && this.TARGET_CONTRAGENTS.some(target =>
                     kontragent.includes(target)
                 );
-                
+
                 // Если контрагент не в списке целевых - пропускаем документ
                 if (!isTargetKontragent) {
                     console.log(`Пропущен (контрагент ${kontragent} не в списке): ${docName}`);
                     continue;
                 }
-                
+
                 console.log(`\nОбработка документа: ${docName}`);
                 console.log(`  Контрагент: ${kontragent}`);
-                
+
                 // Ищем документ в карте поступлений
                 const receiptItem = receiptsMap.get(docName);
-                
+
                 let expectedDate = null;
                 let hasDate = false;
-                
+
                 if (receiptItem) {
                     expectedDate = receiptItem.expectedDate;
                     hasDate = true;
@@ -372,12 +424,12 @@ class DebtReconciliationManager {
                 } else {
                     console.log(`  Не найден в файле поступлений - будет считаться непросроченным`);
                 }
-                
+
                 this.stats.foundDocuments++;
-                
+
                 const debtAmount = this.parseExcelNumber(row[this.COLUMNS.DEBT_AMOUNT] || 0);
                 console.log(`  Сумма долга: ${debtAmount}`);
-                
+
                 if (debtAmount > 0) {
                     // Всегда обрабатываем документ, даже если нет даты
                     const updated = this.updateDocumentRow(i, debtAmount, expectedDate, today, hasDate);
@@ -410,9 +462,9 @@ class DebtReconciliationManager {
     updateDocumentRow(rowIndex, debtAmount, expectedDate, today, hasDate) {
         const row = this.debtData[rowIndex];
         if (!row) return false;
-        
+
         let changed = false;
-        
+
         console.log(`  Обновление строки ${rowIndex}: hasDate=${hasDate}, expectedDate=${expectedDate ? this.formatDate(expectedDate) : 'null'}`);
 
         // Очищаем все интервалы
@@ -424,7 +476,7 @@ class DebtReconciliationManager {
             this.COLUMNS.INTERVAL_90_179,  // X
             this.COLUMNS.INTERVAL_180_PLUS // Y
         ];
-        
+
         // Очищаем интервалы
         for (let j = 0; j < intervalCols.length; j++) {
             const col = intervalCols[j];
@@ -437,48 +489,48 @@ class DebtReconciliationManager {
         // Если даты нет - документ непросроченный
         if (!hasDate || expectedDate === null || expectedDate >= today) {
             console.log(`  -> НЕ ПРОСРОЧЕНО (причина: ${!hasDate ? 'нет даты' : 'дата в будущем'})`);
-            
+
             // O (просрочено) - очищаем
             if (row[this.COLUMNS.OVERDUE] !== 0) {
                 row[this.COLUMNS.OVERDUE] = 0;
                 changed = true;
             }
-            
+
             // R (дни) - очищаем
             if (row[this.COLUMNS.DAYS] !== 0) {
                 row[this.COLUMNS.DAYS] = 0;
                 changed = true;
             }
-            
+
             // T (не просрочено) - устанавливаем сумму
             if (row[this.COLUMNS.NOT_OVERDUE] !== debtAmount) {
                 row[this.COLUMNS.NOT_OVERDUE] = debtAmount;
                 changed = true;
             }
-            
+
         } else if (expectedDate < today) {
             // ПРОСРОЧЕНО
             const daysOverdue = Math.floor((today - expectedDate) / (1000 * 60 * 60 * 24));
             console.log(`  -> ПРОСРОЧЕНО на ${daysOverdue} дн.`);
-            
+
             // O (просрочено) - сумма долга
             if (row[this.COLUMNS.OVERDUE] !== debtAmount) {
                 row[this.COLUMNS.OVERDUE] = debtAmount;
                 changed = true;
             }
-            
+
             // R (дни просрочки)
             if (row[this.COLUMNS.DAYS] !== daysOverdue) {
                 row[this.COLUMNS.DAYS] = daysOverdue;
                 changed = true;
             }
-            
+
             // T (не просрочено) - очищаем
             if (row[this.COLUMNS.NOT_OVERDUE] !== 0) {
                 row[this.COLUMNS.NOT_OVERDUE] = 0;
                 changed = true;
             }
-            
+
             // Определяем интервал по дням
             let intervalCol = this.COLUMNS.INTERVAL_1_15; // U по умолчанию
             if (daysOverdue >= 1 && daysOverdue <= 15) {
@@ -492,7 +544,7 @@ class DebtReconciliationManager {
             } else if (daysOverdue >= 180) {
                 intervalCol = this.COLUMNS.INTERVAL_180_PLUS;  // Y
             }
-            
+
             if (row[intervalCol] !== debtAmount) {
                 row[intervalCol] = debtAmount;
                 changed = true;
@@ -505,7 +557,7 @@ class DebtReconciliationManager {
     async exportToExcel() {
         console.log('=== ОТПРАВКА НА СЕРВЕР ===');
         console.log('Количество документов для отправки:', this.processedDocuments.length);
-        
+
         if (!this.debtFile) {
             console.error('ОШИБКА: файл не загружен');
             return { success: false, message: 'Нет данных для экспорта' };
@@ -522,21 +574,21 @@ class DebtReconciliationManager {
             formData.append('data', JSON.stringify({
                 updatedDocuments: this.processedDocuments
             }));
-            
+
             console.log('Отправляем на сервер...');
-            
+
             const serverResponse = await fetch('http://localhost:5000/save-excel', {
                 method: 'POST',
                 body: formData
             });
-            
+
             if (!serverResponse.ok) {
                 const error = await serverResponse.json();
                 throw new Error(error.error || 'Ошибка сервера');
             }
-            
+
             const blob = await serverResponse.blob();
-            
+
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -545,9 +597,9 @@ class DebtReconciliationManager {
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
-            
+
             console.log('Файл успешно сохранен');
-            
+
             return {
                 success: true,
                 message: 'Файл сохранен с полным форматированием'
@@ -576,5 +628,45 @@ class DebtReconciliationManager {
 
     getProcessedLog() {
         return this.processedDocuments;
+    }
+
+    // Сохранение оригинального файла для тестирования
+    async saveOriginalForTest() {
+        console.log('=== ТЕСТОВОЕ СОХРАНЕНИЕ ОРИГИНАЛА ===');
+        
+        if (!this.debtFile) {
+            console.error('ОШИБКА: файл не загружен');
+            return { 
+                success: false, 
+                message: 'Сначала загрузите файл реестра ДЗ' 
+            };
+        }
+
+        try {
+            // Просто сохраняем оригинальный файл с новым именем
+            const dateStr = this.formatDate(this.currentDate);
+            const fileName = `ДЗ_оригинал_${dateStr}.xlsx`;
+            
+            // Создаем Blob из оригинального файла
+            const blob = new Blob([await this.debtFile.arrayBuffer()], 
+                { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            
+            // Сохраняем через FileSaver
+            saveAs(blob, fileName);
+            
+            console.log('Оригинальный файл сохранен:', fileName);
+            
+            return {
+                success: true,
+                message: `Оригинальный файл сохранен как ${fileName}`
+            };
+            
+        } catch (error) {
+            console.error('Ошибка при сохранении оригинала:', error);
+            return {
+                success: false,
+                message: 'Ошибка при сохранении: ' + error.message
+            };
+        }
     }
 }

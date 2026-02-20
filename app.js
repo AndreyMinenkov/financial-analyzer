@@ -13,7 +13,7 @@ class App {
         console.log('Initializing Financial Analysis App...');
         this.setupNavigation();
         this.setupEventListeners();
-        this.setupTestButton(); // Добавляем обработчик тестовой кнопки
+        this.setupContractorsManager();
         this.loadCurrentPage();
         this.updateStats();
 
@@ -83,7 +83,6 @@ class App {
             case 'debt':
                 // При переходе на страницу сверки обновляем статистику, если есть данные
                 this.updateReconciliationUI();
-                this.updateTestButtonState(); // Обновляем состояние тестовой кнопки
                 break;
         }
     }
@@ -195,7 +194,7 @@ class App {
             this.receiptsManager.searchTransactions(e.target.value);
         });
 
-        // Модальное окно
+        // Модальное окно для депозитов
         const modal = document.getElementById('depositModal');
         const closeModalButtons = document.querySelectorAll('.close-modal');
 
@@ -313,42 +312,94 @@ class App {
         });
     }
 
-    // Добавляем обработчик для тестовой кнопки
-    setupTestButton() {
-        const saveOriginalBtn = document.getElementById('saveOriginalBtn');
-        if (saveOriginalBtn) {
-            saveOriginalBtn.addEventListener('click', async () => {
-                if (!this.debtManager || !this.debtManager.debtWorkbook) {
-                    this.showNotification('Сначала загрузите файл реестра ДЗ', 'error');
-                    return;
+    // Настройка управления контрагентами
+    setupContractorsManager() {
+        const manageContractorsBtn = document.getElementById('manageContractorsBtn');
+        const contractorsModal = document.getElementById('contractorsModal');
+        const closeModal = document.getElementById('closeContractorsModal');
+        const cancelBtn = document.getElementById('cancelContractorsBtn');
+        const saveBtn = document.getElementById('saveContractorsBtn');
+        const addBtn = document.getElementById('addContractorBtn');
+        const contractorsList = document.getElementById('contractorsList');
+
+        // Открытие модального окна
+        manageContractorsBtn.addEventListener('click', () => {
+            this.renderContractorsList();
+            contractorsModal.classList.add('active');
+        });
+
+        // Закрытие модального окна
+        const closeModalFn = () => {
+            contractorsModal.classList.remove('active');
+        };
+
+        closeModal.addEventListener('click', closeModalFn);
+        cancelBtn.addEventListener('click', closeModalFn);
+
+        // Клик вне модального окна
+        window.addEventListener('click', (e) => {
+            if (e.target === contractorsModal) {
+                contractorsModal.classList.remove('active');
+            }
+        });
+
+        // Добавление нового контрагента
+        addBtn.addEventListener('click', () => {
+            const contractor = prompt('Введите наименование контрагента:');
+            if (contractor && contractor.trim() !== '') {
+                if (this.debtManager.addTargetContractor(contractor)) {
+                    this.renderContractorsList();
+                    this.showNotification('Контрагент добавлен', 'success');
+                } else {
+                    this.showNotification('Контрагент уже существует или некорректное название', 'error');
                 }
-                
-                this.showLoading();
-                try {
-                    const result = await this.debtManager.saveOriginalForTest();
-                    if (result.success) {
-                        this.showNotification(result.message, 'success');
-                    } else {
-                        this.showNotification(result.message, 'error');
-                    }
-                } catch (error) {
-                    this.showNotification('Ошибка: ' + error.message, 'error');
-                } finally {
-                    this.hideLoading();
-                }
-            });
-        }
-        this.updateTestButtonState();
+            }
+        });
+
+        // Сохранение изменений (фактически уже сохранено, но обновляем интерфейс)
+        saveBtn.addEventListener('click', () => {
+            contractorsModal.classList.remove('active');
+            this.showNotification('Список контрагентов сохранен', 'success');
+        });
     }
 
-    // Обновляем состояние тестовой кнопки
-    updateTestButtonState() {
-        const saveOriginalBtn = document.getElementById('saveOriginalBtn');
-        if (saveOriginalBtn) {
-            const hasDebtFile = this.debtManager && this.debtManager.debtWorkbook !== null;
-            saveOriginalBtn.disabled = !hasDebtFile;
-            console.log('Тестовая кнопка:', hasDebtFile ? 'активна' : 'неактивна');
+    // Отрисовка списка контрагентов в модальном окне
+    renderContractorsList() {
+        const contractorsList = document.getElementById('contractorsList');
+        const contractors = this.debtManager.getTargetContractors();
+
+        if (contractors.length === 0) {
+            contractorsList.innerHTML = '<p class="empty-message">Список контрагентов пуст. Добавьте хотя бы одного.</p>';
+            return;
         }
+
+        let html = '';
+        contractors.forEach(contractor => {
+            html += `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid var(--border);">
+                    <span>${contractor}</span>
+                    <button class="btn btn-danger btn-sm remove-contractor" data-contractor="${contractor}" style="padding: 4px 8px;">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            `;
+        });
+
+        contractorsList.innerHTML = html;
+
+        // Добавляем обработчики для кнопок удаления
+        contractorsList.querySelectorAll('.remove-contractor').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const contractor = btn.dataset.contractor;
+                if (confirm(`Удалить контрагента "${contractor}"?`)) {
+                    if (this.debtManager.removeTargetContractor(contractor)) {
+                        this.renderContractorsList();
+                        this.showNotification('Контрагент удален', 'success');
+                    }
+                }
+            });
+        });
     }
 
     async loadDebtRegistryFile(file) {
@@ -360,8 +411,6 @@ class App {
 
             // Активируем кнопку сверки, если оба файла загружены
             this.updateReconcileButtonState();
-            // Активируем тестовую кнопку
-            this.updateTestButtonState();
 
             if (result.success) {
                 this.showNotification(result.message, 'success');
@@ -439,7 +488,7 @@ class App {
             logContainer.innerHTML = '<p class="empty-message">Нет обработанных документов</p>';
         } else {
             let html = '<table class="log-table"><tr><th>Документ</th><th>Действие</th><th>Дата</th><th>Сумма</th></tr>';
-            log.slice(0, 50).forEach(item => { // Показываем первые 50 записей
+            log.slice(0, 50).forEach(item => {
                 const dateStr = item.date ? new Date(item.date).toLocaleDateString('ru-RU') : '';
                 html += `<tr>
                     <td>${item.documentName}</td>
@@ -479,8 +528,6 @@ class App {
         document.getElementById('reconciliationLog').style.display = 'none';
         document.getElementById('exportReconciledBtn').disabled = true;
         document.getElementById('reconcileBtn').disabled = true;
-        // Обновляем состояние тестовой кнопки
-        this.updateTestButtonState();
         this.showNotification('Данные очищены', 'info');
     }
 
