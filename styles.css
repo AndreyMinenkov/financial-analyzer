@@ -135,8 +135,34 @@ header h1 i {
     color: white;
 }
 
-/* Секции */
-.section {
+/* Заголовки страниц */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.page-header h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.page-header h2 i {
+    color: var(--primary);
+}
+
+.header-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Секция загрузки */
+.upload-section {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -144,38 +170,7 @@ header h1 i {
     margin-bottom: 24px;
 }
 
-.section h2 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.section h2 i {
-    color: var(--primary);
-    font-size: 18px;
-}
-
-.section-description {
-    color: var(--text-secondary);
-    font-size: 13px;
-    margin-bottom: 20px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--border);
-}
-
-/* Область загрузки */
-.upload-area {
-    display: grid;
-    grid-template-columns: 1fr 350px;
-    gap: 20px;
-    margin-bottom: 20px;
-}
-
-.upload-box {
+.drop-area {
     border: 2px dashed var(--border);
     border-radius: var(--radius);
     padding: 32px;
@@ -183,48 +178,98 @@ header h1 i {
     background: var(--surface-hover);
     transition: all 0.2s;
     cursor: pointer;
+    margin-bottom: 20px;
 }
 
-.upload-box:hover {
+.drop-area:hover {
     border-color: var(--primary);
     background: rgba(37, 99, 235, 0.05);
 }
 
-.upload-box i {
+.drop-area i {
     color: var(--primary);
     margin-bottom: 12px;
     font-size: 40px;
     opacity: 0.8;
 }
 
-.upload-box h3 {
-    font-size: 16px;
-    font-weight: 500;
-    color: var(--text-primary);
-    margin-bottom: 8px;
-}
-
-.upload-box p {
+.drop-area p {
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: 14px;
     margin: 8px 0;
 }
 
-.formats {
+.file-info {
     font-size: 12px;
     color: var(--text-tertiary);
     margin-top: 12px;
 }
 
-.file-list {
+/* Сетка для загрузки двух файлов на странице сверки */
+.reconciliation-upload-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 24px;
+}
+
+.upload-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 16px;
+    padding: 20px;
 }
 
-.file-list h4 {
+.upload-card h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.upload-card h3 i {
+    color: var(--primary);
+}
+
+.file-drop-area {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    text-align: center;
+    background: var(--surface-hover);
+    transition: all 0.2s;
+    cursor: pointer;
+    margin-bottom: 12px;
+}
+
+.file-drop-area:hover {
+    border-color: var(--primary);
+    background: rgba(37, 99, 235, 0.05);
+}
+
+.file-drop-area i {
+    color: var(--primary);
+    margin-bottom: 8px;
+    font-size: 32px;
+    opacity: 0.8;
+}
+
+.file-drop-area p {
+    color: var(--text-secondary);
     font-size: 13px;
+    margin: 4px 0;
+}
+
+/* Список файлов */
+.file-list {
+    margin-top: 20px;
+}
+
+.file-list h3 {
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: 12px;
@@ -233,6 +278,9 @@ header h1 i {
 .file-list-content {
     max-height: 200px;
     overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
 }
 
 .file-item {
@@ -267,69 +315,161 @@ header h1 i {
     font-style: italic;
 }
 
-/* Панель управления */
-.controls-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-    gap: 12px;
-}
-
-.control-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.control-group label {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-secondary);
-}
-
-.filters {
+/* Действия с файлами */
+.upload-actions {
     display: flex;
     gap: 8px;
-    flex-wrap: wrap;
+    margin-top: 20px;
 }
 
-.filters input,
-.filters select {
-    padding: 8px 12px;
+/* Статистика */
+.stats-section {
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius);
+    padding: 20px;
+}
+
+.stats-section h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.stats-section h3 i {
+    color: var(--primary);
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+}
+
+.stat-card {
+    background: var(--surface-hover);
+    border-radius: var(--radius);
+    padding: 16px;
+}
+
+.stat-label {
     font-size: 13px;
-    font-family: var(--font-family);
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.stat-value {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* Сводные карточки */
+.summary-cards {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.summary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    flex: 1;
+}
+
+.summary-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.summary-value {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* Поиск */
+.search-section {
+    margin-bottom: 20px;
+}
+
+.search-wrapper {
+    position: relative;
+    max-width: 400px;
+}
+
+.search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-tertiary);
+    font-size: 14px;
+}
+
+.search-wrapper input {
+    width: 100%;
+    padding: 10px 36px 10px 36px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 14px;
     background: var(--surface);
     color: var(--text-primary);
-    min-width: 200px;
 }
 
-.filters input:focus,
-.filters select:focus {
+.search-wrapper input:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
-.filters input::placeholder {
+.search-wrapper input::placeholder {
     color: var(--text-tertiary);
 }
 
-.date-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+.btn-clear {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px;
 }
 
-.date-controls label {
+.btn-clear:hover {
+    color: var(--text-primary);
+}
+
+/* Выбор даты */
+.date-selector {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+}
+
+.date-selector label {
     font-size: 13px;
+    font-weight: 500;
     color: var(--text-secondary);
 }
 
-.date-controls input[type="date"] {
+.date-selector input[type="date"] {
     padding: 8px 12px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -339,17 +479,107 @@ header h1 i {
     color: var(--text-primary);
 }
 
+.date-selector input[type="date"]:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Действия со сверкой */
+.reconciliation-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+
+/* Лог сверки */
+.reconciliation-log {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-top: 24px;
+}
+
+.reconciliation-log h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.reconciliation-log h3 i {
+    color: var(--primary);
+}
+
+.log-container {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+}
+
+.log-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.log-table th {
+    background: var(--surface-hover);
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+
+.log-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-primary);
+}
+
+.log-table tr:last-child td {
+    border-bottom: none;
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.badge-success {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--success);
+}
+
+.text-center {
+    text-align: center;
+}
+
 /* Кнопки */
 .btn {
-    padding: 6px 12px;
+    padding: 8px 16px;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     transition: all 0.2s;
     background: var(--surface);
     border-color: var(--border);
@@ -357,7 +587,7 @@ header h1 i {
 }
 
 .btn i {
-    font-size: 12px;
+    font-size: 14px;
 }
 
 .btn:hover {
@@ -390,27 +620,28 @@ header h1 i {
     color: white;
 }
 
-.btn-danger {
-    background: var(--error);
-    border-color: var(--error);
+.btn-warning {
+    background: var(--warning);
+    border-color: var(--warning);
     color: white;
 }
 
-.btn-danger:hover {
-    background: #dc2626;
-    border-color: #dc2626;
+.btn-warning:hover {
+    background: #d97706;
+    border-color: #d97706;
     color: white;
 }
 
-.btn-outline {
-    background: transparent;
-    border-color: var(--border);
-    color: var(--text-secondary);
+.btn-secondary {
+    background: var(--secondary);
+    border-color: var(--secondary);
+    color: white;
 }
 
-.btn-outline:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
+.btn-secondary:hover {
+    background: #4b5563;
+    border-color: #4b5563;
+    color: white;
 }
 
 .btn:disabled {
@@ -419,39 +650,11 @@ header h1 i {
     pointer-events: none;
 }
 
-/* Статистика */
-.upload-stats {
-    display: flex;
-    gap: 24px;
-    padding: 16px;
-    background: var(--surface-hover);
-    border-radius: var(--radius);
-    margin-top: 16px;
-}
-
-.stat-item {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-}
-
-.stat-label {
-    font-size: 13px;
-    color: var(--text-secondary);
-}
-
-.stat-value {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
 /* Таблицы */
 .table-container {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: auto;
-    margin-bottom: 12px;
     background: var(--surface);
 }
 
@@ -459,7 +662,7 @@ header h1 i {
     width: 100%;
     border-collapse: collapse;
     font-size: 13px;
-    min-width: 1200px;
+    min-width: 1000px;
 }
 
 .data-table th {
@@ -522,36 +725,6 @@ header h1 i {
     font-style: italic;
 }
 
-/* Подвал таблицы */
-.table-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 0;
-}
-
-.summary {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    font-size: 13px;
-}
-
-.summary-label {
-    color: var(--text-secondary);
-}
-
-.summary-value {
-    font-weight: 600;
-    color: var(--text-primary);
-    font-family: var(--font-mono);
-}
-
-.actions {
-    display: flex;
-    gap: 8px;
-}
-
 /* Модальное окно */
 .modal {
     display: none;
@@ -573,7 +746,7 @@ header h1 i {
 .modal-content {
     background: var(--surface);
     border-radius: var(--radius);
-    width: 400px;
+    width: 450px;
     max-width: 90%;
     box-shadow: var(--shadow-md);
 }
@@ -657,14 +830,68 @@ header h1 i {
     color: var(--text-tertiary);
 }
 
-/* Футер */
-footer {
-    padding: 24px 0;
-    text-align: center;
-    color: var(--text-tertiary);
-    font-size: 12px;
-    border-top: 1px solid var(--border);
-    margin-top: 40px;
+/* Уведомления */
+.notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-md);
+    z-index: 3000;
+    animation: slideIn 0.3s ease;
+}
+
+.notification-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.notification-success {
+    border-left: 4px solid var(--success);
+}
+
+.notification-success i {
+    color: var(--success);
+}
+
+.notification-error {
+    border-left: 4px solid var(--error);
+}
+
+.notification-error i {
+    color: var(--error);
+}
+
+.notification-info {
+    border-left: 4px solid var(--primary);
+}
+
+.notification-info i {
+    color: var(--primary);
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes fadeOut {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
 }
 
 /* Загрузка */
@@ -679,6 +906,7 @@ footer {
     align-items: center;
     justify-content: center;
     z-index: 2000;
+    backdrop-filter: blur(2px);
 }
 
 .loading-spinner {
@@ -706,42 +934,26 @@ footer {
         padding: 0 12px;
     }
 
-    .upload-area {
+    .reconciliation-upload-grid {
         grid-template-columns: 1fr;
     }
 
-    .controls-row {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .filters {
+    .summary-cards {
         flex-direction: column;
     }
 
-    .filters input,
-    .filters select {
-        width: 100%;
-    }
-
-    .upload-stats {
+    .header-actions {
         flex-direction: column;
-        gap: 12px;
     }
 
-    .stat-item {
-        justify-content: space-between;
+    .stats-grid {
+        grid-template-columns: 1fr;
     }
 
     .table-footer {
         flex-direction: column;
         gap: 12px;
         align-items: stretch;
-    }
-
-    .summary {
-        flex-wrap: wrap;
-        justify-content: space-between;
     }
 
     .actions {

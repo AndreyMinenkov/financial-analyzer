@@ -5,6 +5,7 @@ class App {
         this.storage = new StorageManager();
         this.receiptsManager = new ReceiptsManager(this.storage);
         this.balancesManager = new BalancesManager(this.storage);
+        this.debtManager = new DebtReconciliationManager(this.storage);
         this.init();
     }
 
@@ -12,6 +13,7 @@ class App {
         console.log('Initializing Financial Analysis App...');
         this.setupNavigation();
         this.setupEventListeners();
+        this.setupTestButton(); // Добавляем обработчик тестовой кнопки
         this.loadCurrentPage();
         this.updateStats();
 
@@ -78,11 +80,23 @@ class App {
             case 'balances':
                 this.balancesManager.updateTable();
                 break;
+            case 'debt':
+                // При переходе на страницу сверки обновляем статистику, если есть данные
+                this.updateReconciliationUI();
+                this.updateTestButtonState(); // Обновляем состояние тестовой кнопки
+                break;
+        }
+    }
+
+    updateReconciliationUI() {
+        const stats = this.debtManager.getStats();
+        if (stats.debtRows > 0 || stats.receiptsWithDates > 0) {
+            this.showReconciliationStats(stats);
         }
     }
 
     setupEventListeners() {
-        // Загрузка файлов
+        // Загрузка файлов (основная)
         const selectFilesBtn = document.getElementById('selectFilesBtn');
         const fileInput = document.createElement('input');
         fileInput.type = 'file';
@@ -98,7 +112,7 @@ class App {
             fileInput.value = '';
         });
 
-        // Drag and drop
+        // Drag and drop для основной загрузки
         const dropArea = document.getElementById('dropArea');
         dropArea.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -201,6 +215,273 @@ class App {
                 modal.classList.remove('active');
             }
         });
+
+        // ===== Обработчики для страницы сверки долгов =====
+        this.setupDebtReconciliationListeners();
+    }
+
+    setupDebtReconciliationListeners() {
+        // Выбор файла реестра ДЗ
+        const selectDebtRegistryBtn = document.getElementById('selectDebtRegistryBtn');
+        const debtRegistryFile = document.getElementById('debtRegistryFile');
+        const debtRegistryDropArea = document.getElementById('debtRegistryDropArea');
+        const debtRegistryFileInfo = document.getElementById('debtRegistryFileInfo');
+
+        selectDebtRegistryBtn.addEventListener('click', () => {
+            debtRegistryFile.click();
+        });
+
+        debtRegistryFile.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                this.loadDebtRegistryFile(e.target.files[0]);
+            }
+        });
+
+        // Drag and drop для реестра ДЗ
+        debtRegistryDropArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            debtRegistryDropArea.style.borderColor = '#2563eb';
+            debtRegistryDropArea.style.background = 'rgba(37, 99, 235, 0.05)';
+        });
+
+        debtRegistryDropArea.addEventListener('dragleave', () => {
+            debtRegistryDropArea.style.borderColor = '';
+            debtRegistryDropArea.style.background = '';
+        });
+
+        debtRegistryDropArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            debtRegistryDropArea.style.borderColor = '';
+            debtRegistryDropArea.style.background = '';
+
+            if (e.dataTransfer.files.length > 0) {
+                this.loadDebtRegistryFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        // Выбор файла поступлений
+        const selectReceiptsRegistryBtn = document.getElementById('selectReceiptsRegistryBtn');
+        const receiptsRegistryFile = document.getElementById('receiptsRegistryFile');
+        const receiptsRegistryDropArea = document.getElementById('receiptsRegistryDropArea');
+        const receiptsRegistryFileInfo = document.getElementById('receiptsRegistryFileInfo');
+
+        selectReceiptsRegistryBtn.addEventListener('click', () => {
+            receiptsRegistryFile.click();
+        });
+
+        receiptsRegistryFile.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                this.loadReceiptsRegistryFile(e.target.files[0]);
+            }
+        });
+
+        // Drag and drop для поступлений
+        receiptsRegistryDropArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            receiptsRegistryDropArea.style.borderColor = '#2563eb';
+            receiptsRegistryDropArea.style.background = 'rgba(37, 99, 235, 0.05)';
+        });
+
+        receiptsRegistryDropArea.addEventListener('dragleave', () => {
+            receiptsRegistryDropArea.style.borderColor = '';
+            receiptsRegistryDropArea.style.background = '';
+        });
+
+        receiptsRegistryDropArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            receiptsRegistryDropArea.style.borderColor = '';
+            receiptsRegistryDropArea.style.background = '';
+
+            if (e.dataTransfer.files.length > 0) {
+                this.loadReceiptsRegistryFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        // Кнопка сверки
+        document.getElementById('reconcileBtn').addEventListener('click', () => {
+            this.performReconciliation();
+        });
+
+        // Кнопка экспорта
+        document.getElementById('exportReconciledBtn').addEventListener('click', () => {
+            this.exportReconciledFile();
+        });
+
+        // Кнопка очистки
+        document.getElementById('clearReconciliationBtn').addEventListener('click', () => {
+            this.clearReconciliationData();
+        });
+    }
+
+    // Добавляем обработчик для тестовой кнопки
+    setupTestButton() {
+        const saveOriginalBtn = document.getElementById('saveOriginalBtn');
+        if (saveOriginalBtn) {
+            saveOriginalBtn.addEventListener('click', async () => {
+                if (!this.debtManager || !this.debtManager.debtWorkbook) {
+                    this.showNotification('Сначала загрузите файл реестра ДЗ', 'error');
+                    return;
+                }
+                
+                this.showLoading();
+                try {
+                    const result = await this.debtManager.saveOriginalForTest();
+                    if (result.success) {
+                        this.showNotification(result.message, 'success');
+                    } else {
+                        this.showNotification(result.message, 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('Ошибка: ' + error.message, 'error');
+                } finally {
+                    this.hideLoading();
+                }
+            });
+        }
+        this.updateTestButtonState();
+    }
+
+    // Обновляем состояние тестовой кнопки
+    updateTestButtonState() {
+        const saveOriginalBtn = document.getElementById('saveOriginalBtn');
+        if (saveOriginalBtn) {
+            const hasDebtFile = this.debtManager && this.debtManager.debtWorkbook !== null;
+            saveOriginalBtn.disabled = !hasDebtFile;
+            console.log('Тестовая кнопка:', hasDebtFile ? 'активна' : 'неактивна');
+        }
+    }
+
+    async loadDebtRegistryFile(file) {
+        this.showLoading();
+        try {
+            const result = await this.debtManager.loadDebtRegistryFile(file);
+            document.getElementById('debtRegistryFileInfo').innerHTML =
+                `<i class="fas fa-check-circle" style="color: var(--success);"></i> ${file.name} (${result.message})`;
+
+            // Активируем кнопку сверки, если оба файла загружены
+            this.updateReconcileButtonState();
+            // Активируем тестовую кнопку
+            this.updateTestButtonState();
+
+            if (result.success) {
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            this.showNotification('Ошибка загрузки файла', 'error');
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    async loadReceiptsRegistryFile(file) {
+        this.showLoading();
+        try {
+            const result = await this.debtManager.loadReceiptsFile(file);
+            document.getElementById('receiptsRegistryFileInfo').innerHTML =
+                `<i class="fas fa-check-circle" style="color: var(--success);"></i> ${file.name} (${result.message})`;
+
+            // Активируем кнопку сверки, если оба файла загружены
+            this.updateReconcileButtonState();
+
+            if (result.success) {
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            this.showNotification('Ошибка загрузки файла', 'error');
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    updateReconcileButtonState() {
+        const stats = this.debtManager.getStats();
+        const reconcileBtn = document.getElementById('reconcileBtn');
+        reconcileBtn.disabled = !(stats.debtRows > 0 && stats.receiptsWithDates > 0);
+    }
+
+    performReconciliation() {
+        this.showLoading();
+        try {
+            const result = this.debtManager.reconcile();
+            if (result.success) {
+                this.showReconciliationStats(this.debtManager.getStats());
+                this.showReconciliationLog(this.debtManager.getProcessedLog());
+                document.getElementById('exportReconciledBtn').disabled = false;
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            console.error('Ошибка сверки:', error);
+            this.showNotification('Ошибка при выполнении сверки', 'error');
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    showReconciliationStats(stats) {
+        document.getElementById('statTotalDocuments').textContent = stats.totalDocuments || 0;
+        document.getElementById('statFoundDocuments').textContent = stats.foundDocuments || 0;
+        document.getElementById('statUpdatedDocuments').textContent = stats.updatedDocuments || 0;
+        document.getElementById('statReceiptsWithDates').textContent = stats.receiptsWithDates || 0;
+        document.getElementById('reconciliationStats').style.display = 'block';
+    }
+
+    showReconciliationLog(log) {
+        const logContainer = document.getElementById('logContainer');
+        const logSection = document.getElementById('reconciliationLog');
+
+        if (!log || log.length === 0) {
+            logContainer.innerHTML = '<p class="empty-message">Нет обработанных документов</p>';
+        } else {
+            let html = '<table class="log-table"><tr><th>Документ</th><th>Действие</th><th>Дата</th><th>Сумма</th></tr>';
+            log.slice(0, 50).forEach(item => { // Показываем первые 50 записей
+                const dateStr = item.date ? new Date(item.date).toLocaleDateString('ru-RU') : '';
+                html += `<tr>
+                    <td>${item.documentName}</td>
+                    <td><span class="badge badge-success">${item.action}</span></td>
+                    <td>${dateStr}</td>
+                    <td class="number-cell">${this.storage.formatNumber(item.amount || 0)}</td>
+                </tr>`;
+            });
+            if (log.length > 50) {
+                html += `<tr><td colspan="4" class="text-center">... и еще ${log.length - 50} записей</td></tr>`;
+            }
+            html += '</table>';
+            logContainer.innerHTML = html;
+        }
+
+        logSection.style.display = 'block';
+    }
+
+    exportReconciledFile() {
+        try {
+            const result = this.debtManager.exportToExcel();
+            if (result.success) {
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            this.showNotification('Ошибка при сохранении файла', 'error');
+        }
+    }
+
+    clearReconciliationData() {
+        this.debtManager.clearData();
+        document.getElementById('debtRegistryFileInfo').innerHTML = 'Файл не выбран';
+        document.getElementById('receiptsRegistryFileInfo').innerHTML = 'Файл не выбран';
+        document.getElementById('reconciliationStats').style.display = 'none';
+        document.getElementById('reconciliationLog').style.display = 'none';
+        document.getElementById('exportReconciledBtn').disabled = true;
+        document.getElementById('reconcileBtn').disabled = true;
+        // Обновляем состояние тестовой кнопки
+        this.updateTestButtonState();
+        this.showNotification('Данные очищены', 'info');
     }
 
     handleFileSelect(files) {
@@ -276,6 +557,8 @@ class App {
             this.storage.clearFiles();
             this.updateFileList();
             this.updateStats();
+            this.receiptsManager.updateTable();
+            this.balancesManager.updateTable();
         }
     }
 
@@ -309,68 +592,16 @@ class App {
         notification.className = `notification notification-${type}`;
         notification.innerHTML = `
             <div class="notification-content">
-                <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i>
+                <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i>
                 <span>${message}</span>
             </div>
         `;
-
-        // Добавляем стили для уведомления
-        if (!document.querySelector('#notification-styles')) {
-            const styles = document.createElement('style');
-            styles.id = 'notification-styles';
-            styles.textContent = `
-                .notification {
-                    position: fixed;
-                    top: 20px;
-                    right: 20px;
-                    padding: 1rem 1.5rem;
-                    border-radius: var(--radius);
-                    background: white;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                    z-index: 10000;
-                    animation: slideIn 0.3s ease;
-                    max-width: 400px;
-                }
-
-                .notification-success {
-                    border-left: 4px solid var(--success);
-                }
-
-                .notification-error {
-                    border-left: 4px solid var(--error);
-                }
-
-                .notification-content {
-                    display: flex;
-                    align-items: center;
-                    gap: 10px;
-                }
-
-                .notification-content i {
-                    font-size: 1.2rem;
-                }
-
-                .notification-success .notification-content i {
-                    color: var(--success);
-                }
-
-                .notification-error .notification-content i {
-                    color: var(--error);
-                }
-
-                @keyframes slideIn {
-                    from { transform: translateX(100%); opacity: 0; }
-                    to { transform: translateX(0); opacity: 1; }
-                }
-            `;
-            document.head.appendChild(styles);
-        }
 
         document.body.appendChild(notification);
 
         // Удаляем уведомление через 5 секунд
         setTimeout(() => {
-            notification.style.animation = 'slideOut 0.3s ease';
+            notification.style.animation = 'fadeOut 0.3s ease';
             setTimeout(() => notification.remove(), 300);
         }, 5000);
     }
