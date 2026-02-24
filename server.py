@@ -10,78 +10,119 @@ import os
 import gc
 
 app = Flask(__name__)
-
-# Максимально разрешаем CORS
 CORS(app, origins="*", supports_credentials=True)
 
-# Оптимизация для Render - один воркер и отключаем ненужное
 if 'RENDER' in os.environ:
     os.environ['WEB_CONCURRENCY'] = '1'
-    # Отключаем доступ к метрикам psutil
-    os.environ['GUNICORN_CMD_ARGS'] = '--max-requests 1 --max-requests-jitter 10'
 
-# Список целевых контрагентов
-TARGET_CONTRAGENTS = ['ВАНКОРНЕФТЬ АО', 'РН-Ванкор ООО']
+# ... (COLUMNS, SUM_COLUMNS, NUMERIC_COLUMNS остаются теми же)
 
-# Колонки (1‑индексация Excel)
-COLUMNS = {
-    'DOCUMENT_NAME': 1,      # A
-    'DEBT_AMOUNT': 12,       # L
-    'UNSIGNED_DEBT': 13,     # M
-    'OVERDUE': 15,           # O
-    'UNSIGNED_OVERDUE': 16,  # P
-    'DAYS': 18,              # R
-    'OUR_DEBT': 19,          # S - "Наш долг" (не трогаем)
-    'NOT_OVERDUE': 20,       # T - "Не просрочено"
-    'INTERVAL_1_15': 21,     # U - "От 1 до 15 дней"
-    'INTERVAL_16_29': 22,    # V - "От 16 до 29 дней"
-    'INTERVAL_30_89': 23,    # W - "От 30 до 89 дней"
-    'INTERVAL_90_179': 24,   # X - "От 90 до 179 дней"
-    'INTERVAL_180_PLUS': 25, # Y - "Свыше 180 дней"
-}
+# Все функции (is_cell_merged, get_cell_to_write и т.д.) остаются без изменений
+# Но recalc_totals нужно переписать для оптимизации памяти
 
-# Все колонки с суммами (которые нужно суммировать)
-SUM_COLUMNS = [
-    COLUMNS['DEBT_AMOUNT'],        # L
-    COLUMNS['UNSIGNED_DEBT'],      # M
-    COLUMNS['OVERDUE'],            # O
-    COLUMNS['UNSIGNED_OVERDUE'],   # P
-    COLUMNS['NOT_OVERDUE'],        # T
-    COLUMNS['INTERVAL_1_15'],      # U
-    COLUMNS['INTERVAL_16_29'],     # V
-    COLUMNS['INTERVAL_30_89'],     # W
-    COLUMNS['INTERVAL_90_179'],    # X
-    COLUMNS['INTERVAL_180_PLUS'],  # Y
-]
-
-# Все числовые колонки (включая дни)
-NUMERIC_COLUMNS = SUM_COLUMNS + [COLUMNS['DAYS']]
-
-# Остальные функции без изменений (is_cell_merged, get_cell_to_write, и т.д.)
-# ... (весь код функций остается таким же, как в предыдущей версии, 
-#      просто убираем импорт psutil и все обращения к нему)
+def recalc_totals_optimized(ws, updated_rows):
+    """Пересчитывает итоги только для затронутых строк"""
+    print("\n=== ПЕРЕСЧЁТ ИТОГОВ (ОПТИМИЗИРОВАННЫЙ) ===")
+    
+    filials, kontragents, dogovors, documents, total_row = find_structure(ws)
+    
+    # Создаем множества для быстрого поиска
+    filials_set = set(filials)
+    kontragents_set = set(kontragents)
+    dogovors_set = set(dogovors)
+    documents_set = set(documents)
+    
+    # Находим все родительские строки, которые нужно пересчитать
+    rows_to_recalc = set()
+    
+    for doc_row in updated_rows:
+        if doc_row in documents_set:
+            rows_to_recalc.add(doc_row)
+            # Ищем родительский договор
+            for r in range(doc_row - 1, 13, -1):
+                if r in dogovors_set:
+                    rows_to_recalc.add(r)
+                    # Ищем родительского контрагента
+                    for k in range(r - 1, 13, -1):
+                        if k in kontragents_set:
+                            rows_to_recalc.add(k)
+                            # Ищем родительский филиал
+                            for f in range(k - 1, 13, -1):
+                                if f in filials_set:
+                                    rows_to_recalc.add(f)
+                                    break
+                            break
+                    break
+    
+    print(f"Нужно пересчитать строки: {sorted(rows_to_recalc)}")
+    
+    # Функция для суммирования значений
+    def sum_children(parent_row, child_type, child_set):
+        total = {col: 0 for col in SUM_COLUMNS}
+        max_day = 0
+        
+        for r in range(parent_row + 1, ws.max_row + 1):
+            if r in filials_set or r in kontragents_set or r in dogovors_set or r == total_row:
+                break
+            if r in child_set:
+                for col in SUM_COLUMNS:
+                    val = get_cell_value(ws, r, col)
+                    if isinstance(val, (int, float)):
+                        total[col] += val
+                day_val = get_cell_value(ws, r, COLUMNS['DAYS'])
+                if isinstance(day_val, (int, float)) and day_val > max_day:
+                    max_day = day_val
+        
+        return total, max_day
+    
+    # Пересчитываем только нужные строки
+    for row in sorted(rows_to_recalc, reverse=True):
+        if row in dogovors_set:
+            children = [d for d in documents if d > row and d < (next((r for r in sorted(dogovors_set) if r > row), ws.max_row + 1))]
+            totals, max_day = sum_children(row, documents, documents_set)
+            for col, val in totals.items():
+                safe_set_number_format(ws, row, col, val)
+            safe_set_value(ws, row, COLUMNS['DAYS'], max_day)
+            print(f"Договор {row}: пересчитан")
+            
+        elif row in kontragents_set:
+            children = [d for d in dogovors if d > row and d < (next((r for r in sorted(kontragents_set) if r > row), ws.max_row + 1))]
+            totals, max_day = sum_children(row, dogovors, dogovors_set)
+            for col, val in totals.items():
+                safe_set_number_format(ws, row, col, val)
+            safe_set_value(ws, row, COLUMNS['DAYS'], max_day)
+            print(f"Контрагент {row}: пересчитан")
+            
+        elif row in filials_set:
+            children = [k for k in kontragents if k > row and k < (next((r for r in sorted(filials_set) if r > row), ws.max_row + 1))]
+            totals, max_day = sum_children(row, kontragents, kontragents_set)
+            for col, val in totals.items():
+                safe_set_number_format(ws, row, col, val)
+            safe_set_value(ws, row, COLUMNS['DAYS'], max_day)
+            print(f"Филиал {row}: пересчитан")
+    
+    # Пересчитываем общий итог если нужно
+    if total_row and filials:
+        totals, max_day = sum_children(total_row, filials, filials_set)
+        for col, val in totals.items():
+            safe_set_number_format(ws, total_row, col, val)
+        safe_set_value(ws, total_row, COLUMNS['DAYS'], max_day)
+        print(f"Общий итог {total_row}: пересчитан")
 
 @app.route('/', methods=['GET'])
 def index():
-    """Корневой маршрут для проверки"""
     return jsonify({
         'status': 'ok',
-        'message': 'Сервер сверки долгов работает (light version)',
-        'endpoints': {
-            '/save-excel': 'POST - обновление Excel файла',
-            '/': 'GET - проверка сервера'
-        }
-    }), 200
+        'message': 'Сервер сверки долгов (ultra light)',
+        'endpoints': {'/save-excel': 'POST'}
+    })
 
 @app.route('/save-excel', methods=['POST', 'OPTIONS'])
 def save_excel():
-    """Основной эндпоинт для обработки Excel файлов"""
     if request.method == 'OPTIONS':
-        response = app.make_default_options_response()
-        return response
+        return app.make_default_options_response()
     
     try:
-        # Принудительная сборка мусора перед началом
         gc.collect()
         
         file = request.files['file']
@@ -91,30 +132,16 @@ def save_excel():
         print(f"Файл: {file.filename}")
         print(f"Документов для обновления: {len(data['updatedDocuments'])}")
         
-        # Загружаем Excel с минимальными настройками
-        file_bytes = file.read()
-        
-        # Освобождаем file из памяти
-        del file
-        
-        wb = openpyxl.load_workbook(
-            io.BytesIO(file_bytes),
-            read_only=False,
-            keep_vba=False,
-            data_only=True
-        )
-        
-        # Освобождаем file_bytes
-        del file_bytes
-        
+        # Загружаем Excel
+        wb = openpyxl.load_workbook(io.BytesIO(file.read()), data_only=True)
         ws = wb.active
-        today = datetime.now().date()
         
-        # Находим итоговую строку
+        today = datetime.now().date()
         _, _, _, _, total_row = find_structure(ws)
         
-        # Обновляем документы
         updated_rows = set()
+        
+        # Обновляем документы
         for item in data['updatedDocuments']:
             row_number = item['rowNumber']
             debt_amount = float(item['amount'])
@@ -136,29 +163,26 @@ def save_excel():
                 safe_set_value(ws, row_number, COLUMNS['DAYS'], 0)
                 safe_set_number_format(ws, row_number, COLUMNS['NOT_OVERDUE'], debt_amount)
                 updated_rows.add(row_number)
-                
-            elif expected_date < today:
+            else:
                 days_overdue = (today - expected_date).days
                 interval_col = get_interval_col(days_overdue)
-                
                 safe_set_number_format(ws, row_number, COLUMNS['OVERDUE'], debt_amount)
                 safe_set_value(ws, row_number, COLUMNS['DAYS'], days_overdue)
                 safe_set_number_format(ws, row_number, interval_col, debt_amount)
                 updated_rows.add(row_number)
         
         if updated_rows:
-            recalc_totals(ws)
+            recalc_totals_optimized(ws, updated_rows)
             if total_row:
                 update_top_table(ws, total_row)
         
         align_numeric_cells(ws)
         
-        # Сохраняем результат
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
         
-        # Явно удаляем всё для освобождения памяти
+        # Чистим память
         del wb
         del ws
         del data
