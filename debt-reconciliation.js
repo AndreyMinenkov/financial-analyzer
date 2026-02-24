@@ -577,7 +577,7 @@ class DebtReconciliationManager {
 
             console.log('Отправляем на сервер...');
 
-            const serverResponse = await fetch('http://financial-analyzer-scml.onrender.com/save-excel', {
+            const serverResponse = await fetch('https://financial-analyzer-scml.onrender.com/save-excel', {
                 method: 'POST',
                 body: formData
             });
