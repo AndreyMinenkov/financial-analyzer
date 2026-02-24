@@ -1,4 +1,4 @@
-from flask import Flask, request, send_file
+from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 import openpyxl
 from openpyxl.styles import numbers, Alignment
@@ -6,9 +6,19 @@ import io
 from datetime import datetime
 import json
 import traceback
+import os
+import gc
+import psutil
 
 app = Flask(__name__)
-CORS(app)
+
+# Настройка CORS для продакшена
+CORS(app, origins=["null", "file://", "http://localhost:*", "https://*.onrender.com"])
+
+# Оптимизация для Render - один воркер
+if 'RENDER' in os.environ:
+    os.environ['WEB_CONCURRENCY'] = '1'
+    print("✅ Render detected: WEB_CONCURRENCY set to 1")
 
 # Список целевых контрагентов
 TARGET_CONTRAGENTS = ['ВАНКОРНЕФТЬ АО', 'РН-Ванкор ООО']
@@ -50,7 +60,7 @@ NUMERIC_COLUMNS = SUM_COLUMNS + [COLUMNS['DAYS']]
 def is_cell_merged(ws, row, col):
     """Проверяет, является ли ячейка частью объединённого диапазона"""
     for merged_range in ws.merged_cells.ranges:
-        if (merged_range.min_row <= row <= merged_range.max_row and 
+        if (merged_range.min_row <= row <= merged_range.max_row and
             merged_range.min_col <= col <= merged_range.max_col):
             return True
     return False
@@ -82,14 +92,13 @@ def safe_set_value(ws, row, col, value):
         return
     cell = get_cell_to_write(ws, row, col)
     cell.value = value
-    # Для дней тоже применяем выравнивание вправо
     cell.alignment = Alignment(horizontal='right')
 
 def align_numeric_cells(ws):
     """Выравнивает все числовые ячейки по правому краю"""
     print("Выравнивание числовых ячеек по правому краю...")
     
-    for row in range(14, ws.max_row + 1):  # начиная с 14 строки (после заголовков)
+    for row in range(14, ws.max_row + 1):
         for col in NUMERIC_COLUMNS:
             cell = ws.cell(row=row, column=col)
             if cell.value is not None and not is_cell_merged(ws, row, col):
@@ -106,46 +115,46 @@ def safe_set_top_table_value(ws, row, col, value):
     """Безопасно устанавливает значение в верхней таблице (строки 1-8) с учётом объединённых ячеек"""
     cell = get_cell_to_write(ws, row, col)
     cell.value = value
-    cell.number_format = '#,##0.00' if col == 5 else '0.00%'  # E - суммы, F - проценты
+    cell.number_format = '#,##0.00' if col == 5 else '0.00%'
     cell.alignment = Alignment(horizontal='right')
 
 def get_interval_col(days):
     """Возвращает колонку для указанного количества дней просрочки"""
     if days <= 0:
-        return COLUMNS['NOT_OVERDUE']      # T
+        return COLUMNS['NOT_OVERDUE']
     elif 1 <= days <= 15:
-        return COLUMNS['INTERVAL_1_15']    # U
+        return COLUMNS['INTERVAL_1_15']
     elif 16 <= days <= 29:
-        return COLUMNS['INTERVAL_16_29']   # V
+        return COLUMNS['INTERVAL_16_29']
     elif 30 <= days <= 89:
-        return COLUMNS['INTERVAL_30_89']   # W
+        return COLUMNS['INTERVAL_30_89']
     elif 90 <= days <= 179:
-        return COLUMNS['INTERVAL_90_179']  # X
+        return COLUMNS['INTERVAL_90_179']
     else:
-        return COLUMNS['INTERVAL_180_PLUS'] # Y
+        return COLUMNS['INTERVAL_180_PLUS']
 
 def clear_all_intervals(ws, row):
     """Очищает все интервальные колонки для строки"""
     if row <= 13:
         return
     interval_cols = [
-        COLUMNS['NOT_OVERDUE'],      # T
-        COLUMNS['INTERVAL_1_15'],    # U
-        COLUMNS['INTERVAL_16_29'],   # V
-        COLUMNS['INTERVAL_30_89'],   # W
-        COLUMNS['INTERVAL_90_179'],  # X
-        COLUMNS['INTERVAL_180_PLUS'], # Y
+        COLUMNS['NOT_OVERDUE'],
+        COLUMNS['INTERVAL_1_15'],
+        COLUMNS['INTERVAL_16_29'],
+        COLUMNS['INTERVAL_30_89'],
+        COLUMNS['INTERVAL_90_179'],
+        COLUMNS['INTERVAL_180_PLUS'],
     ]
     for col in interval_cols:
         safe_set_number_format(ws, row, col, 0)
 
 def find_structure(ws):
     """Находит все строки филиалов, контрагентов, договоров и документов"""
-    filials = []      # строки с "ДТ "
-    kontragents = []  # строки с ООО/АО (но не ДТ)
-    dogovors = []     # строки с "Договор"
-    documents = []    # строки с актами/реализациями
-    total_row = None  # строка с "Итого"
+    filials = []
+    kontragents = []
+    dogovors = []
+    documents = []
+    total_row = None
     
     for row in range(14, ws.max_row + 1):
         cell_value = ws.cell(row=row, column=1).value
@@ -176,7 +185,6 @@ def recalc_totals(ws):
     print(f"Найдено: филиалов={len(filials)}, контрагентов={len(kontragents)}, "
           f"договоров={len(dogovors)}, документов={len(documents)}")
     
-    # Функция для суммирования значений ТОЛЬКО для указанных строк
     def sum_rows(rows, col):
         total = 0
         for r in rows:
@@ -185,7 +193,6 @@ def recalc_totals(ws):
                 total += val
         return total
     
-    # Функция для нахождения максимального значения дней среди указанных строк
     def max_days_in_rows(rows):
         max_val = 0
         for r in rows:
@@ -194,9 +201,8 @@ def recalc_totals(ws):
                 max_val = val
         return max_val
     
-    # 1. Пересчитываем договоры (суммируем ТОЛЬКО документы под ними)
+    # Пересчет договоров
     for i, dog_row in enumerate(dogovors):
-        # Находим документы, принадлежащие этому договору
         doc_rows = []
         for r in range(dog_row + 1, ws.max_row + 1):
             if r in dogovors or r in kontragents or r in filials or r == total_row:
@@ -206,19 +212,14 @@ def recalc_totals(ws):
         
         if doc_rows:
             print(f"Договор стр.{dog_row}: документы {doc_rows}")
-            
-            # Суммируем все денежные колонки по документам
             for col in SUM_COLUMNS:
                 total = sum_rows(doc_rows, col)
                 safe_set_number_format(ws, dog_row, col, total)
-            
-            # Для дней берём максимальное значение среди документов
             max_day = max_days_in_rows(doc_rows)
             safe_set_value(ws, dog_row, COLUMNS['DAYS'], max_day)
     
-    # 2. Пересчитываем контрагентов (суммируем ТОЛЬКО договоры под ними)
+    # Пересчет контрагентов
     for i, kontr_row in enumerate(kontragents):
-        # Находим договоры, принадлежащие этому контрагенту
         dog_rows = []
         for r in range(kontr_row + 1, ws.max_row + 1):
             if r in kontragents or r in filials or r == total_row:
@@ -228,17 +229,14 @@ def recalc_totals(ws):
         
         if dog_rows:
             print(f"Контрагент стр.{kontr_row}: договоры {dog_rows}")
-            
             for col in SUM_COLUMNS:
                 total = sum_rows(dog_rows, col)
                 safe_set_number_format(ws, kontr_row, col, total)
-            
             max_day = max_days_in_rows(dog_rows)
             safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
     
-    # 3. Пересчитываем филиалы (суммируем ТОЛЬКО контрагентов под ними)
+    # Пересчет филиалов
     for i, fil_row in enumerate(filials):
-        # Находим контрагентов, принадлежащих этому филиалу
         kontr_rows = []
         for r in range(fil_row + 1, ws.max_row + 1):
             if r in filials or r == total_row:
@@ -248,88 +246,88 @@ def recalc_totals(ws):
         
         if kontr_rows:
             print(f"Филиал стр.{fil_row}: контрагенты {kontr_rows}")
-            
             for col in SUM_COLUMNS:
                 total = sum_rows(kontr_rows, col)
                 safe_set_number_format(ws, fil_row, col, total)
-            
             max_day = max_days_in_rows(kontr_rows)
             safe_set_value(ws, fil_row, COLUMNS['DAYS'], max_day)
     
-    # 4. Пересчитываем общий итог (суммируем ТОЛЬКО филиалы)
+    # Пересчет общего итога
     if total_row and filials:
         print(f"Общий итог стр.{total_row}: филиалы {filials}")
-        
         for col in SUM_COLUMNS:
             total = sum_rows(filials, col)
             safe_set_number_format(ws, total_row, col, total)
-        
         max_day = max_days_in_rows(filials)
         safe_set_value(ws, total_row, COLUMNS['DAYS'], max_day)
     
-    print("=== ПЕРЕСЧЁТ ИТОГОВ (НИЖНЯЯ ТАБЛИЦА) ЗАВЕРШЕН ===\n")
+    print("=== ПЕРЕСЧЁТ ИТОГОВ ЗАВЕРШЕН ===\n")
 
 def update_top_table(ws, total_row):
-    """Обновляет верхнюю сводную таблицу (строки 1-8) значениями из итоговой строки"""
+    """Обновляет верхнюю сводную таблицу (строки 1-8)"""
     print("\n=== ОБНОВЛЕНИЕ ВЕРХНЕЙ ТАБЛИЦЫ ===")
     
     if not total_row:
         print("Не найдена итоговая строка")
         return
     
-    # Получаем значения из итоговой строки
-    t_value = get_cell_value(ws, total_row, COLUMNS['NOT_OVERDUE']) or 0        # T37
-    u_value = get_cell_value(ws, total_row, COLUMNS['INTERVAL_1_15']) or 0     # U37
-    v_value = get_cell_value(ws, total_row, COLUMNS['INTERVAL_16_29']) or 0    # V37
-    w_value = get_cell_value(ws, total_row, COLUMNS['INTERVAL_30_89']) or 0    # W37
-    x_value = get_cell_value(ws, total_row, COLUMNS['INTERVAL_90_179']) or 0   # X37
-    y_value = get_cell_value(ws, total_row, COLUMNS['INTERVAL_180_PLUS']) or 0 # Y37
-    l_value = get_cell_value(ws, total_row, COLUMNS['DEBT_AMOUNT']) or 0       # L37
+    t_value = get_cell_value(ws, total_row, COLUMNS['NOT_OVERDUE']) or 0
+    u_value = get_cell_value(ws, total_row, COLUMNS['INTERVAL_1_15']) or 0
+    v_value = get_cell_value(ws, total_row, COLUMNS['INTERVAL_16_29']) or 0
+    w_value = get_cell_value(ws, total_row, COLUMNS['INTERVAL_30_89']) or 0
+    x_value = get_cell_value(ws, total_row, COLUMNS['INTERVAL_90_179']) or 0
+    y_value = get_cell_value(ws, total_row, COLUMNS['INTERVAL_180_PLUS']) or 0
+    l_value = get_cell_value(ws, total_row, COLUMNS['DEBT_AMOUNT']) or 0
     
-    print(f"Значения из строки {total_row}:")
-    print(f"  T (не просрочено): {t_value}")
-    print(f"  U (1-15 дней): {u_value}")
-    print(f"  V (16-29 дней): {v_value}")
-    print(f"  W (30-89 дней): {w_value}")
-    print(f"  X (90-179 дней): {x_value}")
-    print(f"  Y (180+ дней): {y_value}")
-    print(f"  L (итого): {l_value}")
+    print(f"Значения из строки {total_row}: T={t_value}, U={u_value}, V={v_value}, W={w_value}, X={x_value}, Y={y_value}, L={l_value}")
     
-    # Обновляем строки верхней таблицы с учётом объединённых ячеек
-    # Строка 2: Не просрочено
-    safe_set_top_table_value(ws, 2, 5, t_value)  # E2
-    safe_set_top_table_value(ws, 2, 6, t_value / l_value if l_value else 0)  # F2
-    
-    # Строка 3: От 1 до 15 дней
-    safe_set_top_table_value(ws, 3, 5, u_value)  # E3
-    safe_set_top_table_value(ws, 3, 6, u_value / l_value if l_value else 0)  # F3
-    
-    # Строка 4: От 16 до 29 дней
-    safe_set_top_table_value(ws, 4, 5, v_value)  # E4
-    safe_set_top_table_value(ws, 4, 6, v_value / l_value if l_value else 0)  # F4
-    
-    # Строка 5: От 30 до 89 дней
-    safe_set_top_table_value(ws, 5, 5, w_value)  # E5
-    safe_set_top_table_value(ws, 5, 6, w_value / l_value if l_value else 0)  # F5
-    
-    # Строка 6: От 90 до 179 дней
-    safe_set_top_table_value(ws, 6, 5, x_value)  # E6
-    safe_set_top_table_value(ws, 6, 6, x_value / l_value if l_value else 0)  # F6
-    
-    # Строка 7: Свыше 180 дней
-    safe_set_top_table_value(ws, 7, 5, y_value)  # E7
-    safe_set_top_table_value(ws, 7, 6, y_value / l_value if l_value else 0)  # F7
-    
-    # Строка 8: Итого
-    safe_set_top_table_value(ws, 8, 5, l_value)  # E8
-    safe_set_top_table_value(ws, 8, 6, 1.0)      # F8
+    safe_set_top_table_value(ws, 2, 5, t_value)
+    safe_set_top_table_value(ws, 2, 6, t_value / l_value if l_value else 0)
+    safe_set_top_table_value(ws, 3, 5, u_value)
+    safe_set_top_table_value(ws, 3, 6, u_value / l_value if l_value else 0)
+    safe_set_top_table_value(ws, 4, 5, v_value)
+    safe_set_top_table_value(ws, 4, 6, v_value / l_value if l_value else 0)
+    safe_set_top_table_value(ws, 5, 5, w_value)
+    safe_set_top_table_value(ws, 5, 6, w_value / l_value if l_value else 0)
+    safe_set_top_table_value(ws, 6, 5, x_value)
+    safe_set_top_table_value(ws, 6, 6, x_value / l_value if l_value else 0)
+    safe_set_top_table_value(ws, 7, 5, y_value)
+    safe_set_top_table_value(ws, 7, 6, y_value / l_value if l_value else 0)
+    safe_set_top_table_value(ws, 8, 5, l_value)
+    safe_set_top_table_value(ws, 8, 6, 1.0)
     
     print("Верхняя таблица обновлена")
     print("=== ОБНОВЛЕНИЕ ВЕРХНЕЙ ТАБЛИЦЫ ЗАВЕРШЕНО ===\n")
 
-@app.route('/save-excel', methods=['POST'])
+@app.route('/', methods=['GET'])
+def index():
+    """Корневой маршрут для проверки"""
+    memory_usage = psutil.Process().memory_info().rss / 1024 / 1024
+    return jsonify({
+        'status': 'ok',
+        'message': 'Сервер сверки долгов работает (оптимизированная версия)',
+        'memory_mb': round(memory_usage, 2),
+        'endpoints': {
+            '/save-excel': 'POST - обновление Excel файла',
+            '/': 'GET - проверка сервера'
+        }
+    }), 200
+
+@app.route('/save-excel', methods=['POST', 'OPTIONS'])
 def save_excel():
+    """Основной эндпоинт для обработки Excel файлов"""
+    if request.method == 'OPTIONS':
+        response = app.make_default_options_response()
+        return response
+    
     try:
+        # Принудительная сборка мусора перед началом
+        gc.collect()
+        
+        # Логируем использование памяти
+        memory_before = psutil.Process().memory_info().rss / 1024 / 1024
+        print(f"\n=== ПАМЯТЬ ДО ОБРАБОТКИ: {memory_before:.2f} MB ===")
+        
         file = request.files['file']
         data = json.loads(request.form['data'])
         
@@ -337,13 +335,20 @@ def save_excel():
         print(f"Файл: {file.filename}")
         print(f"Документов для обновления: {len(data['updatedDocuments'])}")
         
-        wb = openpyxl.load_workbook(io.BytesIO(file.read()))
+        # Загружаем Excel с минимальными настройками
+        file_bytes = file.read()
+        wb = openpyxl.load_workbook(
+            io.BytesIO(file_bytes),
+            read_only=False,
+            keep_vba=False,
+            data_only=True
+        )
         ws = wb.active
         
         today = datetime.now().date()
         print(f"Текущая дата: {today}")
         
-        # Находим итоговую строку для последующего обновления верхней таблицы
+        # Находим итоговую строку
         _, _, _, _, total_row = find_structure(ws)
         
         # Обновляем документы
@@ -353,9 +358,8 @@ def save_excel():
             debt_amount = float(item['amount'])
             expected_date_str = item['date']
             
-            # Парсим дату
             expected_date = None
-            if expected_date_str and expected_date_str != 'null' and expected_date_str != 'None' and expected_date_str != '':
+            if expected_date_str and expected_date_str not in ('null', 'None', ''):
                 try:
                     clean_str = expected_date_str.strip().strip('"').strip("'")
                     if clean_str:
@@ -364,44 +368,31 @@ def save_excel():
                     print(f"  Ошибка парсинга даты: {e}")
                     expected_date = None
             
-            # Очищаем все интервалы перед обновлением
             clear_all_intervals(ws, row_number)
             
-            # Если даты нет или она в будущем/сегодня - НЕ ПРОСРОЧЕНО
             if expected_date is None or expected_date >= today:
-                # O (просрочено) - очищаем
                 safe_set_number_format(ws, row_number, COLUMNS['OVERDUE'], 0)
-                # R (дни) - очищаем
                 safe_set_value(ws, row_number, COLUMNS['DAYS'], 0)
-                # Запись в T (не просрочено)
                 safe_set_number_format(ws, row_number, COLUMNS['NOT_OVERDUE'], debt_amount)
                 updated_rows.add(row_number)
                 
             elif expected_date < today:
-                # ПРОСРОЧЕНО
                 days_overdue = (today - expected_date).days
                 interval_col = get_interval_col(days_overdue)
                 
-                # O (просрочено) - сумма долга
                 safe_set_number_format(ws, row_number, COLUMNS['OVERDUE'], debt_amount)
-                # R (дни просрочки)
                 safe_set_value(ws, row_number, COLUMNS['DAYS'], days_overdue)
-                # Запись в нужный интервал
                 safe_set_number_format(ws, row_number, interval_col, debt_amount)
                 updated_rows.add(row_number)
         
         if updated_rows:
             print(f"\nОбновлено строк: {len(updated_rows)}")
-            # ПЕРЕСЧИТЫВАЕМ ВСЕ ИТОГИ с учётом иерархии
             recalc_totals(ws)
-            
-            # ОБНОВЛЯЕМ ВЕРХНЮЮ ТАБЛИЦУ
             if total_row:
                 update_top_table(ws, total_row)
         else:
             print("\nНет обновлённых строк")
         
-        # Выравниваем все числовые ячейки по правому краю
         align_numeric_cells(ws)
         
         # Сохраняем результат
@@ -409,7 +400,15 @@ def save_excel():
         wb.save(output)
         output.seek(0)
         
-        print("\n=== ФАЙЛ УСПЕШНО ОБРАБОТАН, ОТПРАВЛЯЕМ ===\n")
+        # Явно удаляем workbook для освобождения памяти
+        del wb
+        del ws
+        
+        # Принудительная сборка мусора после обработки
+        gc.collect()
+        
+        memory_after = psutil.Process().memory_info().rss / 1024 / 1024
+        print(f"=== ПАМЯТЬ ПОСЛЕ ОБРАБОТКИ: {memory_after:.2f} MB ===\n")
         
         return send_file(
             output,
@@ -425,5 +424,8 @@ def save_excel():
         return {'error': str(e)}, 500
 
 if __name__ == '__main__':
-    print("Сервер запущен. Для остановки нажми Ctrl+C\n")
-    app.run(debug=True, port=5000)
+    # Добавляем зависимость psutil в requirements.txt если её нет
+    port = int(os.environ.get('PORT', 5000))
+    print(f"🚀 Сервер запущен на порту {port}")
+    print(f"📊 Доступная память: {psutil.virtual_memory().available / 1024 / 1024:.2f} MB")
+    app.run(host='0.0.0.0', port=port, debug=False)
