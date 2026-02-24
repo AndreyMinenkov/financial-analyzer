@@ -11,3 +11,6 @@ temp.html
 
 # Папка git
 .git/
+venv/
+__pycache__/
+*.pyc
