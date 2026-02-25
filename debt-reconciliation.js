@@ -9,10 +9,10 @@ class DebtReconciliationManager {
         this.receiptsData = [];        // данные из файла 2 (только с датами)
         this.processedDocuments = [];   // логи обработанных документов
         this.currentDate = new Date();
-        
+
         // Загружаем список целевых контрагентов из localStorage или используем стандартный
         this.loadTargetContractors();
-        
+
         this.stats = {
             totalDocuments: 0,
             foundDocuments: 0,
@@ -338,18 +338,33 @@ class DebtReconciliationManager {
                str.indexOf('Поступление') !== -1;
     }
 
-    // Находит контрагента для строки документа
+    // Находит контрагента для строки документа (расширенная версия)
     findKontragentForRow(rowIndex) {
-        for (let i = rowIndex - 1; i >= 14; i--) {  // начиная с 14 строки (после заголовков)
+        for (let i = rowIndex - 1; i >= 14; i--) {
             const row = this.debtData[i];
             if (!row) continue;
-
-            const cellValue = row[0]; // колонка A
+            const cellValue = row[0];
             if (!cellValue) continue;
-
             const strVal = String(cellValue).trim();
-            // Проверяем, является ли строка контрагентом (ООО или АО, но не ДТ)
-            if ((strVal.includes('ООО') || strVal.includes('АО')) && !strVal.startsWith('ДТ ')) {
+            
+            // Проверяем, является ли строка филиалом
+            if (strVal.startsWith('ДТ ')) {
+                return null;  // дошли до филиала - контрагент не найден
+            }
+            
+            // Проверяем, является ли строка контрагентом
+            // Теперь считаем контрагентом любую непустую строку, которая:
+            // - не начинается с ДТ
+            // - не содержит "Договор"
+            // - не содержит слова из списка документов
+            // - имеет длину > 2 символов
+            if (strVal.length > 2 && 
+                !strVal.includes('Договор') && 
+                !strVal.includes('Акт') && 
+                !strVal.includes('Реализация') && 
+                !strVal.includes('Корректировка') && 
+                !strVal.includes('Поступление') && 
+                !strVal.startsWith('ДТ ')) {
                 return strVal;
             }
         }
@@ -396,9 +411,17 @@ class DebtReconciliationManager {
 
                 // Находим контрагента для этого документа
                 const kontragent = this.findKontragentForRow(i);
+                
+                // Проверяем, является ли контрагент целевым
+                // Если контрагент не найден (например, документ висит прямо на филиале) - считаем его целевым?
+                // По логике, если контрагент не определен, документ обрабатывать не нужно
+                if (!kontragent) {
+                    console.log(`Пропущен (контрагент не найден): ${docName}`);
+                    continue;
+                }
 
                 // Проверяем, входит ли контрагент в целевой список
-                const isTargetKontragent = kontragent && this.TARGET_CONTRAGENTS.some(target =>
+                const isTargetKontragent = this.TARGET_CONTRAGENTS.some(target =>
                     kontragent.includes(target)
                 );
 
@@ -633,12 +656,12 @@ class DebtReconciliationManager {
     // Сохранение оригинального файла для тестирования
     async saveOriginalForTest() {
         console.log('=== ТЕСТОВОЕ СОХРАНЕНИЕ ОРИГИНАЛА ===');
-        
+
         if (!this.debtFile) {
             console.error('ОШИБКА: файл не загружен');
-            return { 
-                success: false, 
-                message: 'Сначала загрузите файл реестра ДЗ' 
+            return {
+                success: false,
+                message: 'Сначала загрузите файл реестра ДЗ'
             };
         }
 
@@ -646,21 +669,21 @@ class DebtReconciliationManager {
             // Просто сохраняем оригинальный файл с новым именем
             const dateStr = this.formatDate(this.currentDate);
             const fileName = `ДЗ_оригинал_${dateStr}.xlsx`;
-            
+
             // Создаем Blob из оригинального файла
-            const blob = new Blob([await this.debtFile.arrayBuffer()], 
+            const blob = new Blob([await this.debtFile.arrayBuffer()],
                 { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-            
+
             // Сохраняем через FileSaver
             saveAs(blob, fileName);
-            
+
             console.log('Оригинальный файл сохранен:', fileName);
-            
+
             return {
                 success: true,
                 message: `Оригинальный файл сохранен как ${fileName}`
             };
-            
+
         } catch (error) {
             console.error('Ошибка при сохранении оригинала:', error);
             return {
