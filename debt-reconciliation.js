@@ -599,18 +599,31 @@ class DebtReconciliationManager {
             }));
 
             console.log('Отправляем на сервер...');
+            console.log('Размер processedDocuments:', JSON.stringify(this.processedDocuments).length, 'байт');
+
+            // Увеличиваем таймаут и добавляем обработку ошибок
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 секунд таймаут
 
             const serverResponse = await fetch('http://31.130.155.16:5000/save-excel', {
                 method: 'POST',
-                body: formData
-            });
+                body: formData,
+                signal: controller.signal
+            }).finally(() => clearTimeout(timeoutId));
 
             if (!serverResponse.ok) {
-                const error = await serverResponse.json();
-                throw new Error(error.error || 'Ошибка сервера');
+                let errorMessage = 'Ошибка сервера';
+                try {
+                    const errorData = await serverResponse.json();
+                    errorMessage = errorData.error || errorMessage;
+                } catch (e) {
+                    errorMessage = `HTTP ${serverResponse.status}: ${serverResponse.statusText}`;
+                }
+                throw new Error(errorMessage);
             }
 
             const blob = await serverResponse.blob();
+            console.log('Получен ответ, размер:', blob.size, 'байт');
 
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -629,7 +642,15 @@ class DebtReconciliationManager {
             };
 
         } catch (error) {
-            console.error('Ошибка:', error);
+            console.error('Ошибка при отправке на сервер:', error);
+            
+            if (error.name === 'AbortError') {
+                return {
+                    success: false,
+                    message: 'Превышено время ожидания ответа от сервера. Попробуйте уменьшить количество документов.'
+                };
+            }
+            
             return {
                 success: false,
                 message: 'Ошибка при сохранении: ' + error.message
