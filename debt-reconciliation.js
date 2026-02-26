@@ -445,7 +445,7 @@ class DebtReconciliationManager {
                     hasDate = true;
                     console.log(`  Найден в файле поступлений с датой: ${this.formatDate(expectedDate)}`);
                 } else {
-                    console.log(`  Не найден в файле поступлений - будет считаться непросроченным`);
+                    console.log(`  Не найден в файле поступлений - документ останется без изменений`);
                 }
 
                 this.stats.foundDocuments++;
@@ -453,8 +453,8 @@ class DebtReconciliationManager {
                 const debtAmount = this.parseExcelNumber(row[this.COLUMNS.DEBT_AMOUNT] || 0);
                 console.log(`  Сумма долга: ${debtAmount}`);
 
-                if (debtAmount > 0) {
-                    // Всегда обрабатываем документ, даже если нет даты
+                // ОБНОВЛЯЕМ ТОЛЬКО ЕСЛИ ЕСТЬ ДАТА В ФАЙЛЕ ПОСТУПЛЕНИЙ
+                if (debtAmount > 0 && hasDate) {
                     const updated = this.updateDocumentRow(i, debtAmount, expectedDate, today, hasDate);
                     if (updated) {
                         this.stats.updatedDocuments++;
@@ -468,6 +468,8 @@ class DebtReconciliationManager {
                         });
                         console.log(`  Документ добавлен в processedDocuments`);
                     }
+                } else {
+                    console.log(`  Документ пропущен (нет даты в файле поступлений)`);
                 }
             }
         }
@@ -603,7 +605,7 @@ class DebtReconciliationManager {
 
             // Увеличиваем таймаут и добавляем обработку ошибок
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 300000); // 60 секунд таймаут
+            const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 минут таймаут
 
             const serverResponse = await fetch('http://31.130.155.16:5000/save-excel', {
                 method: 'POST',
