@@ -8,9 +8,10 @@ import json
 import traceback
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB max file size
 CORS(app)
 
-# Список целевых контрагентов
+# Список целевых контрагентов (используется только для фильтрации документов)
 TARGET_CONTRAGENTS = ['ВАНКОРНЕФТЬ АО', 'РН-Ванкор ООО']
 
 # Колонки (1‑индексация Excel)
@@ -229,13 +230,6 @@ def recalc_totals(ws):
 
     # 2. Пересчитываем контрагентов (суммируем ТОЛЬКО договоры под ними)
     for i, kontr_row in enumerate(kontragents):
-        # Получаем название контрагента
-        cell_value = ws.cell(row=kontr_row, column=1).value
-        kontr_name = str(cell_value).strip() if cell_value else ""
-
-        # Проверяем, входит ли контрагент в целевой список
-        is_target = any(target in kontr_name for target in TARGET_CONTRAGENTS)
-
         # Находим договоры, принадлежащие этому контрагенту
         dog_rows = []
         for r in range(kontr_row + 1, ws.max_row + 1):
@@ -245,28 +239,15 @@ def recalc_totals(ws):
                 dog_rows.append(r)
 
         if dog_rows:
-            print(f"Контрагент стр.{kontr_row} ({kontr_name}): договоры {dog_rows}, целевой={is_target}")
+            print(f"Контрагент стр.{kontr_row}: договоры {dog_rows}")
 
-            if is_target:
-                # Для целевых контрагентов пересчитываем всё
-                for col in SUM_COLUMNS:
-                    total = sum_rows(dog_rows, col)
-                    safe_set_number_format(ws, kontr_row, col, total)
+            # Пересчитываем ВСЕХ контрагентов (и целевых, и нецелевых)
+            for col in SUM_COLUMNS:
+                total = sum_rows(dog_rows, col)
+                safe_set_number_format(ws, kontr_row, col, total)
 
-                max_day = max_days_in_rows(dog_rows)
-                safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
-            else:
-                # Для нецелевых контрагентов оставляем итоги как есть
-                print(f"  → Нецелевой контрагент, итоги не меняются")
-                # Переписываем текущие значения обратно (чтобы не потерять)
-                for col in SUM_COLUMNS:
-                    current_val = get_cell_value(ws, kontr_row, col)
-                    safe_set_number_format(ws, kontr_row, col, current_val)
-                current_day = get_cell_value(ws, kontr_row, COLUMNS['DAYS'])
-                if current_day:
-                    safe_set_value(ws, kontr_row, COLUMNS['DAYS'], current_day)
-        else:
-            print(f"Контрагент стр.{kontr_row} ({kontr_name}): нет договоров")
+            max_day = max_days_in_rows(dog_rows)
+            safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
 
     # 3. Пересчитываем филиалы (суммируем ТОЛЬКО контрагентов под ними)
     for i, fil_row in enumerate(filials):

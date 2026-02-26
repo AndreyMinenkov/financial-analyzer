@@ -603,7 +603,7 @@ class DebtReconciliationManager {
 
             // Увеличиваем таймаут и добавляем обработку ошибок
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 секунд таймаут
+            const timeoutId = setTimeout(() => controller.abort(), 300000); // 60 секунд таймаут
 
             const serverResponse = await fetch('http://31.130.155.16:5000/save-excel', {
                 method: 'POST',
