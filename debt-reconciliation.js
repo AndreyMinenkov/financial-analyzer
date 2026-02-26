@@ -682,6 +682,133 @@ class DebtReconciliationManager {
         }
     }
 
+    async exportOverdueToWord() {
+        console.log('=== ВЫГРУЗКА ПРОСРОЧЕННЫХ АКТОВ ===');
+        
+        if (!this.debtData || this.debtData.length === 0) {
+            return { success: false, message: 'Нет данных для выгрузки' };
+        }
+
+        // Собираем просроченные акты только по целевым контрагентам
+        const overdueActs = [];
+        
+        for (let i = 0; i < this.debtData.length; i++) {
+            const row = this.debtData[i];
+            if (!row || row.length === 0) continue;
+
+            // Проверяем, что это документ (акт)
+            if (this.isDocumentRow(row)) {
+                const docName = String(row[this.COLUMNS.DOCUMENT_NAME] || '').trim();
+                const kontragent = this.findKontragentForRow(i);
+                
+                // Проверяем, что контрагент целевой
+                if (!kontragent) continue;
+                
+                const isTargetKontragent = this.TARGET_CONTRAGENTS.some(target =>
+                    kontragent.includes(target)
+                );
+                
+                if (!isTargetKontragent) continue;
+
+                // Получаем сумму просрочки из колонки O
+                const overdueAmount = row[this.COLUMNS.OVERDUE] || 0;
+                
+                // Если есть просроченная сумма
+                if (overdueAmount > 0) {
+                    const days = row[this.COLUMNS.DAYS] || 0;
+                    
+                    // Находим договор (поднимаемся вверх по строкам)
+                    let dogovor = '';
+                    for (let j = i - 1; j >= 0; j--) {
+                        const prevRow = this.debtData[j];
+                        if (!prevRow) continue;
+                        const prevVal = prevRow[0];
+                        if (prevVal && String(prevVal).includes('Договор')) {
+                            dogovor = String(prevVal).trim();
+                            break;
+                        }
+                    }
+
+                    // Находим дату подписания из processedDocuments
+                    const processedDoc = this.processedDocuments.find(d => d.rowIndex === i);
+                    const paymentDate = processedDoc ? processedDoc.date : '';
+
+                    overdueActs.push({
+                        dogovor: dogovor,
+                        documentName: docName,
+                        amount: overdueAmount,
+                        paymentDate: paymentDate,
+                        days: days
+                    });
+                }
+            }
+        }
+
+        if (overdueActs.length === 0) {
+            return { success: false, message: 'Нет просроченных актов для выгрузки' };
+        }
+
+        // Сортируем по количеству дней просрочки (от большего к меньшему)
+        overdueActs.sort((a, b) => b.days - a.days);
+
+        // Формируем содержимое Word-документа
+        let content = this.generateWordDocument(overdueActs);
+
+        // Создаем и скачиваем файл
+        const blob = new Blob([content], { type: 'application/msword' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Просроченные_акты_${this.formatDate(this.currentDate)}.doc`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+
+        console.log(`Выгружено ${overdueActs.length} просроченных актов`);
+
+        return {
+            success: true,
+            message: `Выгружено ${overdueActs.length} просроченных актов`
+        };
+    }
+
+    generateWordDocument(overdueActs) {
+        const totalSum = overdueActs.reduce((sum, item) => sum + item.amount, 0);
+        
+        let tableRows = '';
+        overdueActs.forEach(item => {
+            tableRows += `| ${item.dogovor} | ${item.documentName} | ${this.formatNumber(item.amount)} | ${item.paymentDate} | ${item.days} |\n`;
+        });
+
+        return `По данным нашего учета, за вашей компанией числится просроченная дебиторская задолженность следующим договорам и актам.
+
+**Детали задолженности:**
+
+-------------------------------------------------------------------------------
+Номер договора            Акт                         Сумма          Дата оплаты    Количество
+                                                                   согласно дате  просроченных
+                                                                   подписания         дней
+-------------------------------------------------------------------------------
+${tableRows}
+-------------------------------------------------------------------------------
+ИТОГО: ${this.formatNumber(totalSum)} рублей
+
+Просим вас погасить образовавшуюся задолженность в кратчайшие сроки.
+
+С уважением,
+Гулин Денис Владимирович
+Генеральный директор`;
+    }
+
+    formatNumber(num) {
+        if (!num) return '0.00';
+        return new Intl.NumberFormat('ru-RU', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(num);
+    }
+
     getStats() {
         return {
             totalDocuments: this.stats.totalDocuments,

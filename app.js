@@ -303,7 +303,22 @@ class App {
 
         // Кнопка экспорта
         document.getElementById('exportReconciledBtn').addEventListener('click', () => {
+
+        // Обработчик для выгрузки просроченных актов
+        document.getElementById('exportOverdueBtn').addEventListener('click', () => {
+            this.exportOverdueActs();
+        });
             this.exportReconciledFile();
+
+        // Обработчик для выгрузки просроченных актов
+        document.getElementById('exportOverdueBtn').addEventListener('click', () => {
+            this.exportOverdueActs();
+        });
+        });
+
+        // Обработчик для выгрузки просроченных актов
+        document.getElementById('exportOverdueBtn').addEventListener('click', () => {
+            this.exportOverdueActs();
         });
 
         // Кнопка очистки
@@ -460,6 +475,7 @@ class App {
                 this.showReconciliationStats(this.debtManager.getStats());
                 this.showReconciliationLog(this.debtManager.getProcessedLog());
                 document.getElementById('exportReconciledBtn').disabled = false;
+        document.getElementById('exportOverdueBtn').disabled = false;
                 this.showNotification(result.message, 'success');
             } else {
                 this.showNotification(result.message, 'error');
@@ -508,6 +524,20 @@ class App {
     }
 
     exportReconciledFile() {
+
+    exportOverdueActs() {
+        try {
+            const result = this.debtManager.exportOverdueToWord();
+            if (result.success) {
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            console.error('Ошибка при выгрузке просроченных актов:', error);
+            this.showNotification('Ошибка при выгрузке просроченных актов', 'error');
+        }
+    }
         try {
             const result = this.debtManager.exportToExcel();
             if (result.success) {
@@ -527,6 +557,7 @@ class App {
         document.getElementById('reconciliationStats').style.display = 'none';
         document.getElementById('reconciliationLog').style.display = 'none';
         document.getElementById('exportReconciledBtn').disabled = true;
+        document.getElementById('exportOverdueBtn').disabled = true;
         document.getElementById('reconcileBtn').disabled = true;
         this.showNotification('Данные очищены', 'info');
     }
