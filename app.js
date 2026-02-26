@@ -301,22 +301,12 @@ class App {
             this.performReconciliation();
         });
 
-        // Кнопка экспорта
+        // Кнопка экспорта в Excel
         document.getElementById('exportReconciledBtn').addEventListener('click', () => {
-
-        // Обработчик для выгрузки просроченных актов
-        document.getElementById('exportOverdueBtn').addEventListener('click', () => {
-            this.exportOverdueActs();
-        });
             this.exportReconciledFile();
-
-        // Обработчик для выгрузки просроченных актов
-        document.getElementById('exportOverdueBtn').addEventListener('click', () => {
-            this.exportOverdueActs();
-        });
         });
 
-        // Обработчик для выгрузки просроченных актов
+        // Кнопка выгрузки просроченных актов в Word
         document.getElementById('exportOverdueBtn').addEventListener('click', () => {
             this.exportOverdueActs();
         });
@@ -475,7 +465,7 @@ class App {
                 this.showReconciliationStats(this.debtManager.getStats());
                 this.showReconciliationLog(this.debtManager.getProcessedLog());
                 document.getElementById('exportReconciledBtn').disabled = false;
-        document.getElementById('exportOverdueBtn').disabled = false;
+                document.getElementById('exportOverdueBtn').disabled = false;
                 this.showNotification(result.message, 'success');
             } else {
                 this.showNotification(result.message, 'error');
@@ -524,6 +514,18 @@ class App {
     }
 
     exportReconciledFile() {
+        try {
+            const result = this.debtManager.exportToExcel();
+            if (result.success) {
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            console.error('Ошибка при сохранении файла:', error);
+            this.showNotification('Ошибка при сохранении файла', 'error');
+        }
+    }
 
     exportOverdueActs() {
         try {
@@ -536,17 +538,6 @@ class App {
         } catch (error) {
             console.error('Ошибка при выгрузке просроченных актов:', error);
             this.showNotification('Ошибка при выгрузке просроченных актов', 'error');
-        }
-    }
-        try {
-            const result = this.debtManager.exportToExcel();
-            if (result.success) {
-                this.showNotification(result.message, 'success');
-            } else {
-                this.showNotification(result.message, 'error');
-            }
-        } catch (error) {
-            this.showNotification('Ошибка при сохранении файла', 'error');
         }
     }
 
