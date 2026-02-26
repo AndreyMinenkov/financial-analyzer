@@ -346,24 +346,24 @@ class DebtReconciliationManager {
             const cellValue = row[0];
             if (!cellValue) continue;
             const strVal = String(cellValue).trim();
-            
+
             // Проверяем, является ли строка филиалом
             if (strVal.startsWith('ДТ ')) {
                 return null;  // дошли до филиала - контрагент не найден
             }
-            
+
             // Проверяем, является ли строка контрагентом
             // Теперь считаем контрагентом любую непустую строку, которая:
             // - не начинается с ДТ
             // - не содержит "Договор"
             // - не содержит слова из списка документов
             // - имеет длину > 2 символов
-            if (strVal.length > 2 && 
-                !strVal.includes('Договор') && 
-                !strVal.includes('Акт') && 
-                !strVal.includes('Реализация') && 
-                !strVal.includes('Корректировка') && 
-                !strVal.includes('Поступление') && 
+            if (strVal.length > 2 &&
+                !strVal.includes('Договор') &&
+                !strVal.includes('Акт') &&
+                !strVal.includes('Реализация') &&
+                !strVal.includes('Корректировка') &&
+                !strVal.includes('Поступление') &&
                 !strVal.startsWith('ДТ ')) {
                 return strVal;
             }
@@ -411,7 +411,7 @@ class DebtReconciliationManager {
 
                 // Находим контрагента для этого документа
                 const kontragent = this.findKontragentForRow(i);
-                
+
                 // Проверяем, является ли контрагент целевым
                 // Если контрагент не найден (например, документ висит прямо на филиале) - считаем его целевым?
                 // По логике, если контрагент не определен, документ обрабатывать не нужно
@@ -667,14 +667,14 @@ class DebtReconciliationManager {
 
         } catch (error) {
             console.error('Ошибка при отправке на сервер:', error);
-            
+
             if (error.name === 'AbortError') {
                 return {
                     success: false,
                     message: 'Превышено время ожидания ответа от сервера. Попробуйте уменьшить количество документов.'
                 };
             }
-            
+
             return {
                 success: false,
                 message: 'Ошибка при сохранении: ' + error.message
@@ -682,16 +682,16 @@ class DebtReconciliationManager {
         }
     }
 
-    async exportOverdueToWord() {
-        console.log('=== ВЫГРУЗКА ПРОСРОЧЕННЫХ АКТОВ ===');
-        
+    async exportOverdueToExcel() {
+        console.log('=== ВЫГРУЗКА ПРОСРОЧЕННЫХ АКТОВ В EXCEL ===');
+
         if (!this.debtData || this.debtData.length === 0) {
             return { success: false, message: 'Нет данных для выгрузки' };
         }
 
         // Собираем просроченные акты только по целевым контрагентам
         const overdueActs = [];
-        
+
         for (let i = 0; i < this.debtData.length; i++) {
             const row = this.debtData[i];
             if (!row || row.length === 0) continue;
@@ -700,23 +700,23 @@ class DebtReconciliationManager {
             if (this.isDocumentRow(row)) {
                 const docName = String(row[this.COLUMNS.DOCUMENT_NAME] || '').trim();
                 const kontragent = this.findKontragentForRow(i);
-                
+
                 // Проверяем, что контрагент целевой
                 if (!kontragent) continue;
-                
+
                 const isTargetKontragent = this.TARGET_CONTRAGENTS.some(target =>
                     kontragent.includes(target)
                 );
-                
+
                 if (!isTargetKontragent) continue;
 
                 // Получаем сумму просрочки из колонки O
                 const overdueAmount = row[this.COLUMNS.OVERDUE] || 0;
-                
+
                 // Если есть просроченная сумма
                 if (overdueAmount > 0) {
                     const days = row[this.COLUMNS.DAYS] || 0;
-                    
+
                     // Находим договор (поднимаемся вверх по строкам)
                     let dogovor = '';
                     for (let j = i - 1; j >= 0; j--) {
@@ -751,54 +751,68 @@ class DebtReconciliationManager {
         // Сортируем по количеству дней просрочки (от большего к меньшему)
         overdueActs.sort((a, b) => b.days - a.days);
 
-        // Формируем содержимое Word-документа
-        let content = this.generateWordDocument(overdueActs);
+        // Формируем Excel-файл
+        const totalSum = overdueActs.reduce((sum, item) => sum + item.amount, 0);
 
-        // Создаем и скачиваем файл
-        const blob = new Blob([content], { type: 'application/msword' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `Просроченные_акты_${this.formatDate(this.currentDate)}.doc`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
+        // Подготовка данных для Excel
+        const data = [
+            ['Договор', 'Акт (документ)', 'Сумма просрочки, руб', 'Дата оплаты (по подписанию)', 'Количество просроченных дней']
+        ];
 
-        console.log(`Выгружено ${overdueActs.length} просроченных актов`);
+        overdueActs.forEach(item => {
+            data.push([
+                item.dogovor,
+                item.documentName,
+                item.amount,
+                item.paymentDate,
+                item.days
+            ]);
+        });
+
+        // Добавляем итоговую строку
+        data.push([
+            'ИТОГО:',
+            '',
+            totalSum,
+            '',
+            ''
+        ]);
+
+        // Создание рабочей книги
+        const ws = XLSX.utils.aoa_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Просроченные акты');
+
+        // Устанавливаем числовой формат для столбца с суммой
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        for (let row = range.s.r + 1; row <= range.e.r; row++) {
+            const cellAddress = XLSX.utils.encode_cell({ r: row, c: 2 }); // Столбец C (индекс 2)
+            if (ws[cellAddress]) {
+                ws[cellAddress].t = 'n';
+                ws[cellAddress].z = '#,##0.00';
+            }
+        }
+
+        // Автонастройка ширины столбцов
+        const colWidths = [
+            { wch: 40 }, // Договор
+            { wch: 40 }, // Акт
+            { wch: 20 }, // Сумма
+            { wch: 15 }, // Дата оплаты
+            { wch: 12 }  // Дни
+        ];
+        ws['!cols'] = colWidths;
+
+        // Сохранение файла
+        const fileName = `Просроченные_акты_${this.formatDate(this.currentDate)}.xlsx`;
+        XLSX.writeFile(wb, fileName);
+
+        console.log(`Выгружено ${overdueActs.length} просроченных актов в Excel`);
 
         return {
             success: true,
-            message: `Выгружено ${overdueActs.length} просроченных актов`
+            message: `Выгружено ${overdueActs.length} просроченных актов в Excel`
         };
-    }
-
-    generateWordDocument(overdueActs) {
-        const totalSum = overdueActs.reduce((sum, item) => sum + item.amount, 0);
-        
-        let tableRows = '';
-        overdueActs.forEach(item => {
-            tableRows += `| ${item.dogovor} | ${item.documentName} | ${this.formatNumber(item.amount)} | ${item.paymentDate} | ${item.days} |\n`;
-        });
-
-        return `По данным нашего учета, за вашей компанией числится просроченная дебиторская задолженность следующим договорам и актам.
-
-**Детали задолженности:**
-
--------------------------------------------------------------------------------
-Номер договора            Акт                         Сумма          Дата оплаты    Количество
-                                                                   согласно дате  просроченных
-                                                                   подписания         дней
--------------------------------------------------------------------------------
-${tableRows}
--------------------------------------------------------------------------------
-ИТОГО: ${this.formatNumber(totalSum)} рублей
-
-Просим вас погасить образовавшуюся задолженность в кратчайшие сроки.
-
-С уважением,
-Гулин Денис Владимирович
-Генеральный директор`;
     }
 
     formatNumber(num) {

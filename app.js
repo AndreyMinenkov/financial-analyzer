@@ -529,7 +529,7 @@ class App {
 
     exportOverdueActs() {
         try {
-            const result = this.debtManager.exportOverdueToWord();
+            const result = this.debtManager.exportOverdueToExcel();
             if (result.success) {
                 this.showNotification(result.message, 'success');
             } else {
