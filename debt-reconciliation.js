@@ -445,7 +445,7 @@ class DebtReconciliationManager {
                     hasDate = true;
                     console.log(`  Найден в файле поступлений с датой: ${this.formatDate(expectedDate)}`);
                 } else {
-                    console.log(`  Не найден в файле поступлений - документ останется без изменений`);
+                    console.log(`  Не найден в файле поступлений - документ будет считаться НЕПРОСРОЧЕННЫМ`);
                 }
 
                 this.stats.foundDocuments++;
@@ -454,7 +454,7 @@ class DebtReconciliationManager {
                 console.log(`  Сумма долга: ${debtAmount}`);
 
                 // ОБНОВЛЯЕМ ТОЛЬКО ЕСЛИ ЕСТЬ ДАТА В ФАЙЛЕ ПОСТУПЛЕНИЙ
-                if (debtAmount > 0 && hasDate) {
+                if (debtAmount > 0) {
                     const updated = this.updateDocumentRow(i, debtAmount, expectedDate, today, hasDate);
                     if (updated) {
                         this.stats.updatedDocuments++;
@@ -468,8 +468,6 @@ class DebtReconciliationManager {
                         });
                         console.log(`  Документ добавлен в processedDocuments`);
                     }
-                } else {
-                    console.log(`  Документ пропущен (нет даты в файле поступлений)`);
                 }
             }
         }
@@ -511,67 +509,91 @@ class DebtReconciliationManager {
             }
         }
 
-        // Если даты нет - документ непросроченный
-        if (!hasDate || expectedDate === null || expectedDate >= today) {
-            console.log(`  -> НЕ ПРОСРОЧЕНО (причина: ${!hasDate ? 'нет даты' : 'дата в будущем'})`);
+        // СЛУЧАЙ 1: Есть дата подписания
+        if (hasDate && expectedDate !== null) {
+            if (expectedDate >= today) {
+                // Дата в будущем или сегодня - НЕ ПРОСРОЧЕНО
+                console.log(`  -> НЕ ПРОСРОЧЕНО (дата в будущем/сегодня: ${this.formatDate(expectedDate)})`);
 
-            // O (просрочено) - очищаем
+                // O (просрочено) - очищаем
+                if (row[this.COLUMNS.OVERDUE] !== 0) {
+                    row[this.COLUMNS.OVERDUE] = 0;
+                    changed = true;
+                }
+
+                // R (дни) - очищаем
+                if (row[this.COLUMNS.DAYS] !== 0) {
+                    row[this.COLUMNS.DAYS] = 0;
+                    changed = true;
+                }
+
+                // T (не просрочено) - устанавливаем сумму
+                if (row[this.COLUMNS.NOT_OVERDUE] !== debtAmount) {
+                    row[this.COLUMNS.NOT_OVERDUE] = debtAmount;
+                    changed = true;
+                }
+
+            } else if (expectedDate < today) {
+                // Дата в прошлом - ПРОСРОЧЕНО
+                const daysOverdue = Math.floor((today - expectedDate) / (1000 * 60 * 60 * 24));
+                console.log(`  -> ПРОСРОЧЕНО на ${daysOverdue} дн. (дата: ${this.formatDate(expectedDate)})`);
+
+                // O (просрочено) - сумма долга
+                if (row[this.COLUMNS.OVERDUE] !== debtAmount) {
+                    row[this.COLUMNS.OVERDUE] = debtAmount;
+                    changed = true;
+                }
+
+                // R (дни просрочки)
+                if (row[this.COLUMNS.DAYS] !== daysOverdue) {
+                    row[this.COLUMNS.DAYS] = daysOverdue;
+                    changed = true;
+                }
+
+                // T (не просрочено) - очищаем
+                if (row[this.COLUMNS.NOT_OVERDUE] !== 0) {
+                    row[this.COLUMNS.NOT_OVERDUE] = 0;
+                    changed = true;
+                }
+
+                // Определяем интервал по дням
+                let intervalCol = this.COLUMNS.INTERVAL_1_15; // U по умолчанию
+                if (daysOverdue >= 1 && daysOverdue <= 15) {
+                    intervalCol = this.COLUMNS.INTERVAL_1_15;      // U
+                } else if (daysOverdue >= 16 && daysOverdue <= 29) {
+                    intervalCol = this.COLUMNS.INTERVAL_16_29;     // V
+                } else if (daysOverdue >= 30 && daysOverdue <= 89) {
+                    intervalCol = this.COLUMNS.INTERVAL_30_89;     // W
+                } else if (daysOverdue >= 90 && daysOverdue <= 179) {
+                    intervalCol = this.COLUMNS.INTERVAL_90_179;    // X
+                } else if (daysOverdue >= 180) {
+                    intervalCol = this.COLUMNS.INTERVAL_180_PLUS;  // Y
+                }
+
+                if (row[intervalCol] !== debtAmount) {
+                    row[intervalCol] = debtAmount;
+                    changed = true;
+                }
+            }
+        } else {
+            // СЛУЧАЙ 2 и 3: Нет даты подписания
+            console.log(`  -> НЕТ ДАТЫ ПОДПИСАНИЯ - документ считается НЕПРОСРОЧЕННЫМ`);
+
+            // O (просрочено) - очищаем, если там была сумма
             if (row[this.COLUMNS.OVERDUE] !== 0) {
                 row[this.COLUMNS.OVERDUE] = 0;
                 changed = true;
             }
 
-            // R (дни) - очищаем
+            // R (дни) - очищаем, если там были дни
             if (row[this.COLUMNS.DAYS] !== 0) {
                 row[this.COLUMNS.DAYS] = 0;
                 changed = true;
             }
 
-            // T (не просрочено) - устанавливаем сумму
+            // T (не просрочено) - устанавливаем сумму (даже если документ был просрочен в исходнике)
             if (row[this.COLUMNS.NOT_OVERDUE] !== debtAmount) {
                 row[this.COLUMNS.NOT_OVERDUE] = debtAmount;
-                changed = true;
-            }
-
-        } else if (expectedDate < today) {
-            // ПРОСРОЧЕНО
-            const daysOverdue = Math.floor((today - expectedDate) / (1000 * 60 * 60 * 24));
-            console.log(`  -> ПРОСРОЧЕНО на ${daysOverdue} дн.`);
-
-            // O (просрочено) - сумма долга
-            if (row[this.COLUMNS.OVERDUE] !== debtAmount) {
-                row[this.COLUMNS.OVERDUE] = debtAmount;
-                changed = true;
-            }
-
-            // R (дни просрочки)
-            if (row[this.COLUMNS.DAYS] !== daysOverdue) {
-                row[this.COLUMNS.DAYS] = daysOverdue;
-                changed = true;
-            }
-
-            // T (не просрочено) - очищаем
-            if (row[this.COLUMNS.NOT_OVERDUE] !== 0) {
-                row[this.COLUMNS.NOT_OVERDUE] = 0;
-                changed = true;
-            }
-
-            // Определяем интервал по дням
-            let intervalCol = this.COLUMNS.INTERVAL_1_15; // U по умолчанию
-            if (daysOverdue >= 1 && daysOverdue <= 15) {
-                intervalCol = this.COLUMNS.INTERVAL_1_15;      // U
-            } else if (daysOverdue >= 16 && daysOverdue <= 29) {
-                intervalCol = this.COLUMNS.INTERVAL_16_29;     // V
-            } else if (daysOverdue >= 30 && daysOverdue <= 89) {
-                intervalCol = this.COLUMNS.INTERVAL_30_89;     // W
-            } else if (daysOverdue >= 90 && daysOverdue <= 179) {
-                intervalCol = this.COLUMNS.INTERVAL_90_179;    // X
-            } else if (daysOverdue >= 180) {
-                intervalCol = this.COLUMNS.INTERVAL_180_PLUS;  // Y
-            }
-
-            if (row[intervalCol] !== debtAmount) {
-                row[intervalCol] = debtAmount;
                 changed = true;
             }
         }
