@@ -1,7 +1,8 @@
 from flask import Flask, request, send_file
 from flask_cors import CORS
 import openpyxl
-from openpyxl.styles import numbers, Alignment
+import openpyxl.utils
+from openpyxl.styles import numbers, Alignment, Font, PatternFill, Border, Side
 import io
 from datetime import datetime
 import json
@@ -144,18 +145,9 @@ def find_structure(ws):
     """Находит все строки филиалов, контрагентов, договоров и документов"""
     filials = []      # строки с "ДТ "
     kontragents = []  # любые строки, которые являются контрагентами
-    dogovors = []     # строки с "Договор", "Счет на оплату", "Передача права собственности на ТС", "Штрафы ПДД"
+    dogovors = []     # строки с "Договор"
     documents = []    # строки с актами/реализациями
     total_row = None  # строка с "Итого"
-
-    # Ключевые слова для договоров
-    dogovor_keywords = [
-        'договор', 'Договор',
-        'счет на оплату', 'Счет на оплату',
-        'передача права собственности на тс', 'Передача права собственности на ТС',
-        'передача права собственности на тс1', 'Передача права собственности на ТС1',
-        'штрафы пдд', 'Штрафы ПДД'
-    ]
 
     for row in range(14, ws.max_row + 1):
         cell_value = ws.cell(row=row, column=1).value
@@ -172,8 +164,8 @@ def find_structure(ws):
         elif 'Итого' in str_val or 'ИТОГО' in str_val:
             total_row = row
 
-        # 3. Договоры (проверяем по списку ключевых слов)
-        elif any(keyword in str_val for keyword in dogovor_keywords):
+        # 3. Договоры
+        elif str_val.startswith('Договор') or 'договор' in str_val.lower():
             dogovors.append(row)
 
         # 4. Документы
@@ -449,3 +441,192 @@ def save_excel():
 if __name__ == '__main__':
     print("Сервер запущен. Для остановки нажми Ctrl+C\n")
     app.run(debug=True, port=5000)
+
+
+# ===== ОБРАБОТКА ОПЛАТ ПОСТАВЩИКАМ =====
+@app.route('/save-suppliers', methods=['POST'])
+def save_suppliers():
+    try:
+        file = request.files['file']
+        data = json.loads(request.form['data'])
+
+        print(f"\n=== ПОЛУЧЕН ЗАПРОС ОПЛАТ ПОСТАВЩИКАМ ===")
+        print(f"Файл: {file.filename}")
+        print(f"Сводных таблиц: {len(data.get('pivotTables', []))}")
+
+        wb = openpyxl.load_workbook(io.BytesIO(file.read()))
+
+        # Для каждой сводной таблицы добавляем на соответствующий лист
+        for pivot_info in data.get('pivotTables', []):
+            sheet_name = pivot_info['sheetName']
+            pivot_data = pivot_info['data']
+            pivot_headers = pivot_info['headers']
+
+            if sheet_name not in wb.sheetnames:
+                print(f"Лист '{sheet_name}' не найден, пропускаем")
+                continue
+
+            ws = wb[sheet_name]
+            append_pivot_table(ws, pivot_data, pivot_headers)
+
+        # Сохраняем результат
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        print("\n=== ФАЙЛ УСПЕШНО ОБРАБОТАН, ОТПРАВЛЯЕМ ===\n")
+
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=f'Оплаты_поставщикам_{datetime.now().strftime("%Y-%m-%d")}.xlsx',
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+
+    except Exception as e:
+        print("\n!!! ОШИБКА !!!")
+        print(str(e))
+        traceback.print_exc()
+        return {'error': str(e)}, 500
+
+
+def append_pivot_table(ws, pivot_data, pivot_headers):
+    """Добавляет сводную таблицу на существующий лист через 5 строк после данных"""
+
+    # Находим последнюю строку с данными
+    last_row = ws.max_row
+
+    # Стартовая строка для сводной (5 пустых строк + 1 для заголовка)
+    title_row = last_row + 6  # +1 переход + 5 пустых
+    header_row = last_row + 7
+    data_start_row = last_row + 8
+
+    # Стили
+    title_font = Font(bold=True, size=14)
+    title_alignment = Alignment(horizontal='center')
+
+    header_fill = PatternFill(start_color='FF8C00', end_color='FF8C00', fill_type='solid')
+    header_font = Font(bold=True, size=11, color='FFFFFF')
+    header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+    total_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+    total_font = Font(bold=True, size=11)
+    total_alignment = Alignment(horizontal='right')
+
+    explanation_fill = PatternFill(start_color='FFF2CC', end_color='FFF2CC', fill_type='solid')
+
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+
+    number_format = '#,##0.00'
+
+    # Заголовок сводной таблицы
+    title_cell = ws.cell(row=title_row, column=1, value='Сводная таблица оплат по подразделениям')
+    title_cell.font = title_font
+    title_cell.alignment = title_alignment
+
+    # Объединение для заголовка
+    last_col = len(pivot_headers) + 3  # Контрагент + подразделения + Итого + Пояснение
+    ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=last_col)
+
+    # Заголовки таблицы
+    headers = ['Контрагент'] + pivot_headers + ['Итого', 'Пояснение']
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=header_row, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = header_alignment
+        cell.border = thin_border
+
+    # Записываем данные
+    col_totals = {h: 0 for h in pivot_headers}
+    grand_total = 0
+
+    for row_idx, row_data in enumerate(pivot_data):
+        current_row = data_start_row + row_idx
+
+        # Контрагент
+        ws.cell(row=current_row, column=1, value=row_data['contractor']).border = thin_border
+
+        # Подразделения
+        for col_idx, h in enumerate(pivot_headers, 2):
+            value = row_data.get(h, 0)
+            # Если 0 — ставим "-", иначе число
+            if value == 0:
+                cell = ws.cell(row=current_row, column=col_idx, value='-')
+            else:
+                cell = ws.cell(row=current_row, column=col_idx, value=value)
+                cell.number_format = number_format
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal='right')
+            col_totals[h] = col_totals.get(h, 0) + value
+
+        # Итого по строке
+        row_total = row_data.get('total', 0)
+        if row_total == 0:
+            total_cell = ws.cell(row=current_row, column=len(pivot_headers) + 2, value='-')
+        else:
+            total_cell = ws.cell(row=current_row, column=len(pivot_headers) + 2, value=row_total)
+            total_cell.number_format = number_format
+        total_cell.border = thin_border
+        total_cell.alignment = Alignment(horizontal='right')
+        total_cell.font = Font(bold=True)
+        grand_total += row_total
+
+        # Пояснение
+        explanation = row_data.get('explanation', '')
+        expl_cell = ws.cell(row=current_row, column=len(pivot_headers) + 3, value=explanation)
+        expl_cell.border = thin_border
+
+        # Жёлтый фон для строк с пояснениями
+        if explanation:
+            for col_idx in range(1, last_col + 1):
+                cell = ws.cell(row=current_row, column=col_idx)
+                cell.fill = explanation_fill
+
+    # Итоговая строка
+    total_row = data_start_row + len(pivot_data)
+
+    ws.cell(row=total_row, column=1, value='ИТОГО').font = total_font
+    ws.cell(row=total_row, column=1).fill = total_fill
+    ws.cell(row=total_row, column=1).alignment = total_alignment
+    ws.cell(row=total_row, column=1).border = thin_border
+
+    for col_idx, h in enumerate(pivot_headers, 2):
+        col_total = col_totals[h]
+        if col_total == 0:
+            cell = ws.cell(row=total_row, column=col_idx, value='-')
+        else:
+            cell = ws.cell(row=total_row, column=col_idx, value=col_total)
+            cell.number_format = number_format
+        cell.font = total_font
+        cell.fill = total_fill
+        cell.alignment = total_alignment
+        cell.border = thin_border
+
+    grand_total_cell = ws.cell(row=total_row, column=len(pivot_headers) + 2, value=grand_total if grand_total > 0 else '-')
+    if grand_total > 0:
+        grand_total_cell.number_format = number_format
+    grand_total_cell.font = total_font
+    grand_total_cell.fill = total_fill
+    grand_total_cell.alignment = total_alignment
+    grand_total_cell.border = thin_border
+
+    ws.cell(row=total_row, column=len(pivot_headers) + 3, value='').fill = total_fill
+    ws.cell(row=total_row, column=len(pivot_headers) + 3).border = thin_border
+
+    # Ширина колонок
+    ws.column_dimensions['A'].width = 35
+    for i in range(2, len(pivot_headers) + 2):
+        col_letter = openpyxl.utils.get_column_letter(i)
+        ws.column_dimensions[col_letter].width = 18
+
+    last_col_letter = openpyxl.utils.get_column_letter(len(pivot_headers) + 2)
+    ws.column_dimensions[last_col_letter].width = 18
+
+    expl_col_letter = openpyxl.utils.get_column_letter(len(pivot_headers) + 3)
+    ws.column_dimensions[expl_col_letter].width = 50
