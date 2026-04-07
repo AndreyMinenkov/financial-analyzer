@@ -3,6 +3,7 @@ from flask_cors import CORS
 import openpyxl
 import openpyxl.utils
 from openpyxl.styles import numbers, Alignment, Font, PatternFill, Border, Side
+from copy import copy
 import io
 from datetime import datetime
 import json
@@ -420,29 +421,54 @@ def save_excel():
 
         # ===== СОЗДАЁМ ДОПОЛНИТЕЛЬНЫЕ ЛИСТЫ =====
 
+        # data уже содержит все поля summaryData (updatedDocuments, currentDayData, summaryDT и т.д.)
+        print(f"\n=== Ключи в data: {list(data.keys())}")
+
         # 1. Лист «Свод ДЗ СИ УАТ» — копируем из загруженного файла
-        if 'siUatFile' in request.files:
-            siuat_file = request.files['siUatFile']
-            if siuat_file.filename:
-                print(f"\n=== ДОБАВЛЯЕМ ЛИСТ 'Свод ДЗ СИ УАТ' из файла {siuat_file.filename} ===")
-                try:
-                    siuat_wb = openpyxl.load_workbook(io.BytesIO(siuat_file.read()))
-                    siuat_ws = siuat_wb.active
+        siuat_file = request.files.get('siUatFile')
+        if siuat_file and siuat_file.filename:
+            print(f"\n=== ДОБАВЛЯЕМ ЛИСТ 'Свод ДЗ СИ УАТ' из файла {siuat_file.filename} ===")
+            try:
+                siuat_wb = openpyxl.load_workbook(io.BytesIO(siuat_file.read()))
+                siuat_ws = siuat_wb.active
 
-                    # Переименовываем активный лист
-                    siuat_ws.title = 'Свод ДЗ СИ УАТ'
+                # Копируем ячейки, стили, объединённые диапазоны вручную
+                new_ws = wb.create_sheet('Свод ДЗ СИ УАТ')
+                for row in siuat_ws.iter_rows():
+                    for cell in row:
+                        new_cell = new_ws.cell(row=cell.row, column=cell.column, value=cell.value)
+                        if cell.has_style:
+                            new_cell._style = copy(cell._style)
+                        if cell.data_type == 'f':
+                            new_cell.data_type = 'f'
+                # Копируем объединённые ячейки
+                for merged_range in siuat_ws.merged_cells.ranges:
+                    new_ws.merge_cells(str(merged_range))
+                # Копируем размеры колонок
+                for col_letter, col_dim in siuat_ws.column_dimensions.items():
+                    new_ws.column_dimensions[col_letter].width = col_dim.width
+                for row_num, row_dim in siuat_ws.row_dimensions.items():
+                    new_ws.row_dimensions[row_num].height = row_dim.height
 
-                    # Копируем лист в основную книгу
-                    wb._sheets.append(siuat_ws)
-                    siuat_ws.parent = wb
-                    print("Лист 'Свод ДЗ СИ УАТ' добавлен")
-                except Exception as e:
-                    print(f"Ошибка при добавлении листа СИ УАТ: {e}")
+                print("Лист 'Свод ДЗ СИ УАТ' добавлен")
+            except Exception as e:
+                print(f"!!! Ошибка при добавлении листа СИ УАТ: {e}")
+                traceback.print_exc()
+        else:
+            print("Файл СИ УАТ не загружен, пропускаем лист 'Свод ДЗ СИ УАТ'")
 
         # 2. Лист «Сводные таблицы»
         print("\n=== СОЗДАЁМ ЛИСТ 'Сводные таблицы' ===")
-        summary_ws = wb.create_sheet('Сводные таблицы')
-        create_summary_sheet(summary_ws, data)
+        print(f"currentDayData: {json.dumps(data.get('currentDayData', {}), ensure_ascii=False)[:300]}")
+        print(f"previousDayData: {json.dumps(data.get('previousDayData', {}), ensure_ascii=False)[:300]}")
+        print(f"summaryDT: {data.get('summaryDT', {})}")
+        try:
+            summary_ws = wb.create_sheet('Сводные таблицы')
+            create_summary_sheet(summary_ws, data)
+            print("Лист 'Сводные таблицы' создан успешно")
+        except Exception as e:
+            print(f"!!! Ошибка при создании листа 'Сводные таблицы': {e}")
+            traceback.print_exc()
 
         # Сохраняем результат
         output = io.BytesIO()
