@@ -434,23 +434,62 @@ def save_excel():
 
                 # Копируем ячейки, стили, объединённые диапазоны вручную
                 new_ws = wb.create_sheet('Свод ДЗ СИ УАТ')
-                for row in siuat_ws.iter_rows():
+
+                # Копируем все ячейки с полным форматированием
+                for row in siuat_ws.iter_rows(min_row=1, max_row=siuat_ws.max_row,
+                                               min_col=1, max_col=siuat_ws.max_column):
                     for cell in row:
                         new_cell = new_ws.cell(row=cell.row, column=cell.column, value=cell.value)
                         if cell.has_style:
-                            new_cell._style = copy(cell._style)
-                        if cell.data_type == 'f':
-                            new_cell.data_type = 'f'
+                            new_cell.font = copy(cell.font)
+                            new_cell.border = copy(cell.border)
+                            new_cell.fill = copy(cell.fill)
+                            new_cell.number_format = cell.number_format
+                            new_cell.alignment = copy(cell.alignment)
+                            new_cell.protection = copy(cell.protection)
+
                 # Копируем объединённые ячейки
                 for merged_range in siuat_ws.merged_cells.ranges:
                     new_ws.merge_cells(str(merged_range))
-                # Копируем размеры колонок
+
+                # Копируем размеры колонок и группировку
                 for col_letter, col_dim in siuat_ws.column_dimensions.items():
                     new_ws.column_dimensions[col_letter].width = col_dim.width
+                    if col_dim.outline_level:
+                        new_ws.column_dimensions[col_letter].outline_level = col_dim.outline_level
+                    if col_dim.hidden:
+                        new_ws.column_dimensions[col_letter].hidden = col_dim.hidden
+
+                # Копируем размеры строк, группировку и скрытие
                 for row_num, row_dim in siuat_ws.row_dimensions.items():
                     new_ws.row_dimensions[row_num].height = row_dim.height
+                    if row_dim.outline_level:
+                        new_ws.row_dimensions[row_num].outline_level = row_dim.outline_level
+                    if row_dim.hidden:
+                        new_ws.row_dimensions[row_num].hidden = row_dim.hidden
 
-                print("Лист 'Свод ДЗ СИ УАТ' добавлен")
+                # Копируем настройки группировки (summary below/right)
+                new_ws.sheet_properties.outlinePr.summaryBelow = siuat_ws.sheet_properties.outlinePr.summaryBelow
+                new_ws.sheet_properties.outlinePr.summaryRight = siuat_ws.sheet_properties.outlinePr.summaryRight
+
+                # Копируем настройки печати и страницы
+                if siuat_ws.print_options:
+                    for attr in ['grid_lines', 'grid_lines_set', 'horizontal_centered', 'vertical_centered']:
+                        if hasattr(siuat_ws.print_options, attr):
+                            setattr(new_ws.print_options, attr, getattr(siuat_ws.print_options, attr))
+
+                if siuat_ws.page_setup:
+                    for attr in ['orientation', 'paperSize', 'scale', 'fitToHeight', 'fitToWidth',
+                                 'pageOrder', 'blackAndWhite', 'draft', 'cellComments', 'errors']:
+                        if hasattr(siuat_ws.page_setup, attr) and getattr(siuat_ws.page_setup, attr) is not None:
+                            setattr(new_ws.page_setup, attr, getattr(siuat_ws.page_setup, attr))
+
+                if siuat_ws.page_margins:
+                    for attr in ['left', 'right', 'top', 'bottom', 'header', 'footer']:
+                        if hasattr(siuat_ws.page_margins, attr):
+                            setattr(new_ws.page_margins, attr, getattr(siuat_ws.page_margins, attr))
+
+                print("Лист 'Свод ДЗ СИ УАТ' добавлен с полным форматированием")
             except Exception as e:
                 print(f"!!! Ошибка при добавлении листа СИ УАТ: {e}")
                 traceback.print_exc()
