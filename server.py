@@ -240,7 +240,14 @@ def find_structure(ws):
     return filials, kontragents, dogovors, documents, total_row
 
 def recalc_totals(ws):
-    """Пересчитывает все итоговые строки в файле с учётом иерархии"""
+    """Пересчитывает все итоговые строки в файле с учётом иерархии
+    
+    Иерархия суммирования (строгая, без дублирования):
+    Документы → Договоры → Контрагенты → Филиалы → Итого
+    
+    ВАЖНО: Если у контрагента нет договоров, НЕ суммируем документы напрямую.
+    Контрагент уже содержит сумму в исходном файле.
+    """
     print("\n=== ПЕРЕСЧЁТ ИТОГОВ ===")
 
     filials, kontragents, dogovors, documents, total_row = find_structure(ws)
@@ -248,52 +255,38 @@ def recalc_totals(ws):
     print(f"Найдено: филиалов={len(filials)}, контрагентов={len(kontragents)}, "
           f"договоров={len(dogovors)}, документов={len(documents)}")
 
-    # ВАЖНО: Исключаем строки контрагентов и филиалов из суммирования документов
-    # Суммируем только строки, которые НЕ являются контрагентами/филиалами/договорами
-    document_rows_only = [r for r in documents if r not in kontragents and r not in filials and r not in dogovors]
-    
-    print(f"Чистых документов (без дублей): {len(document_rows_only)}")
+    # Создаём множества для быстрого поиска
+    kontragent_set = set(kontragents)
+    filial_set = set(filials)
+    dogovor_set = set(dogovors)
+    document_set = set(documents)
 
     # Функция для суммирования значений ТОЛЬКО для указанных строк
-    # ВАЖНО: Исключаем строки, которые уже являются итогами (контрагенты, филиалы, договоры)
-    def sum_rows(rows, col, exclude_rows=None):
-        if exclude_rows is None:
-            exclude_rows = set()
+    def sum_rows(rows, col):
         total = 0
         for r in rows:
-            if r in exclude_rows:
-                continue  # Пропускаем строки-итоги
             val = get_cell_value(ws, r, col)
             if isinstance(val, (int, float)):
                 total += val
         return total
 
     # Функция для нахождения максимального значения дней среди указанных строк
-    def max_days_in_rows(rows, exclude_rows=None):
-        if exclude_rows is None:
-            exclude_rows = set()
+    def max_days_in_rows(rows):
         max_val = 0
         for r in rows:
-            if r in exclude_rows:
-                continue
             val = get_cell_value(ws, r, COLUMNS['DAYS'])
             if isinstance(val, (int, float)) and val > max_val:
                 max_val = val
         return max_val
 
-    # Создаём множества для быстрого поиска
-    kontragent_set = set(kontragents)
-    filial_set = set(filials)
-    dogovor_set = set(dogovors)
-
-    # 1. Пересчитываем договоры (суммируем ТОЛЬКО чистые документы под ними)
+    # 1. Пересчитываем договоры (суммируем документы под ними)
     for i, dog_row in enumerate(dogovors):
         # Находим документы, принадлежащие этому договору
         doc_rows = []
         for r in range(dog_row + 1, ws.max_row + 1):
             if r in dogovor_set or r in kontragent_set or r in filial_set or r == total_row:
                 break
-            if r in document_rows_only:  # Используем только чистые документы
+            if r in document_set:
                 doc_rows.append(r)
 
         if doc_rows:
@@ -309,7 +302,9 @@ def recalc_totals(ws):
             safe_set_value(ws, dog_row, COLUMNS['DAYS'], max_day)
 
     # 2. Пересчитываем контрагентов (суммируем ТОЛЬКО договоры под ними)
-    # ВАЖНО: НЕ суммируем документы напрямую, только через договоры
+    # ВАЖНО: Если нет договоров - НЕ трогаем контрагента!
+    # Контрагент уже содержит правильную сумму в исходном файле.
+    # Это предотвращает двойное суммирование.
     for i, kontr_row in enumerate(kontragents):
         # Находим договоры, принадлежащие этому контрагенту
         dog_rows = []
@@ -319,37 +314,22 @@ def recalc_totals(ws):
             if r in dogovor_set:
                 dog_rows.append(r)
 
-        # Если есть договоры - суммируем их
         if dog_rows:
             print(f"Контрагент стр.{kontr_row}: договоры {dog_rows}")
 
-            # Пересчитываем ВСЕХ контрагентов (и целевых, и нецелевых)
+            # Суммируем ВСЕ денежные колонки по договорам
             for col in SUM_COLUMNS:
-                total = sum_rows(dog_rows, col, exclude_rows=kontragent_set | filial_set)
+                total = sum_rows(dog_rows, col)
                 safe_set_number_format(ws, kontr_row, col, total)
 
-            max_day = max_days_in_rows(dog_rows, exclude_rows=kontragent_set | filial_set)
+            max_day = max_days_in_rows(dog_rows)
             safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
         else:
-            # Если нет договоров, ищем документы напрямую под контрагентом
-            doc_rows = []
-            for r in range(kontr_row + 1, ws.max_row + 1):
-                if r in kontragent_set or r in filial_set or r == total_row:
-                    break
-                if r in document_rows_only:
-                    doc_rows.append(r)
-            
-            if doc_rows:
-                print(f"Контрагент стр.{kontr_row}: документы (без договоров) {doc_rows}")
-                
-                for col in SUM_COLUMNS:
-                    total = sum_rows(doc_rows, col)
-                    safe_set_number_format(ws, kontr_row, col, total)
+            # Нет договоров - НЕ трогаем контрагента
+            # Он уже содержит правильную сумму из исходного файла
+            print(f"Контрагент стр.{kontr_row}: нет договоров, пропускаем (используем значение из файла)")
 
-                max_day = max_days_in_rows(doc_rows)
-                safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
-
-    # 3. Пересчитываем филиалы (суммируем ТОЛЬКО контрагентов под ними)
+    # 3. Пересчитываем филиалы (суммируем контрагентов под ними)
     for i, fil_row in enumerate(filials):
         # Находим контрагентов, принадлежащие этому филиалу
         kontr_rows = []
@@ -363,13 +343,13 @@ def recalc_totals(ws):
             print(f"Филиал стр.{fil_row}: контрагенты {kontr_rows}")
 
             for col in SUM_COLUMNS:
-                total = sum_rows(kontr_rows, col, exclude_rows=filial_set)
+                total = sum_rows(kontr_rows, col)
                 safe_set_number_format(ws, fil_row, col, total)
 
-            max_day = max_days_in_rows(kontr_rows, exclude_rows=filial_set)
+            max_day = max_days_in_rows(kontr_rows)
             safe_set_value(ws, fil_row, COLUMNS['DAYS'], max_day)
 
-    # 4. Пересчитываем общий итог (суммируем ТОЛЬКО филиалы)
+    # 4. Пересчитываем общий итог (суммируем филиалы)
     if total_row and filials:
         print(f"Общий итог стр.{total_row}: филиалы {filials}")
 
