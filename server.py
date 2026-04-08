@@ -193,19 +193,25 @@ def clear_all_intervals(ws, row):
     for col in interval_cols:
         safe_set_number_format(ws, row, col, 0)
 
-# Расширенный список типов документов
+# Расширенный список типов документов (листья дерева)
 DOCUMENT_KEYWORDS = [
     'Акт', 'Реализация', 'Корректировка', 'Поступление',
     'Взаимозачет', 'Взаимозачёт', 'Списание', 'УПД', 'Счет-фактура',
     'Товарная накладная', 'ТОРГ-12', 'Универсальный передаточный'
 ]
 
+# Промежуточные уровни (не листья, но и не итоги)
+INTERMEDIATE_KEYWORDS = [
+    'Счет на оплату', 'Счёт на оплату', 'Счет №', 'Счёт №',
+    'Договор', 'договор', 'Соглашение', 'Дополнительное соглашение'
+]
+
 def find_structure(ws):
-    """Находит все строки филиалов, контрагентов, договоров и документов"""
+    """Находит все строки филиалов, контрагентов, договоров, промежуточных и документов"""
     filials = []      # строки с "ДТ "
-    kontragents = []  # любые строки, которые являются контрагентами
-    dogovors = []     # строки с "Договор"
-    documents = []    # строки с документами
+    kontragents = []  # контрагенты
+    intermediates = [] # промежуточные уровни (счета, договоры)
+    documents = []    # документы (листья дерева)
     total_row = None  # строка с "Итого"
 
     for row in range(14, ws.max_row + 1):
@@ -223,11 +229,11 @@ def find_structure(ws):
         elif 'Итого' in str_val or 'ИТОГО' in str_val:
             total_row = row
 
-        # 3. Договоры
-        elif str_val.startswith('Договор') or 'договор' in str_val.lower():
-            dogovors.append(row)
+        # 3. Промежуточные уровни (счета, договоры)
+        elif any(keyword in str_val for keyword in INTERMEDIATE_KEYWORDS):
+            intermediates.append(row)
 
-        # 4. Документы - расширенная проверка
+        # 4. Документы (листья дерева)
         elif any(keyword in str_val for keyword in DOCUMENT_KEYWORDS):
             documents.append(row)
 
@@ -237,130 +243,152 @@ def find_structure(ws):
             if len(str_val) > 2 and not str_val[0].isdigit():
                 kontragents.append(row)
 
-    return filials, kontragents, dogovors, documents, total_row
+    return filials, kontragents, intermediates, documents, total_row
+
+def build_tree_hierarchy(filials, kontragents, intermediates, documents):
+    """Строит дерево иерархии: филиал → контрагент → промежуточные → документы
+    
+    Возвращает dict: parent_row -> [child_rows]
+    """
+    # Объединяем все строки с сортировкой
+    all_rows = sorted(filials + kontragents + intermediates + documents)
+    
+    # Определяем уровень каждой строки
+    row_levels = {}
+    for r in filials:
+        row_levels[r] = 0  # Филиал - уровень 0
+    for r in kontragents:
+        row_levels[r] = 1  # Контрагент - уровень 1
+    for r in intermediates:
+        row_levels[r] = 2  # Промежуточный - уровень 2
+    for r in documents:
+        row_levels[r] = 3  # Документ - уровень 3 (лист)
+    
+    # Строим дерево: для каждой строки находим непосредственных детей
+    children = {}
+    
+    for i, row in enumerate(all_rows):
+        current_level = row_levels[row]
+        children[row] = []
+        
+        # Ищем детей: следующие строки с уровнем current_level + 1
+        for j in range(i + 1, len(all_rows)):
+            next_row = all_rows[j]
+            next_level = row_levels[next_row]
+            
+            if next_level <= current_level:
+                # Нашли строку того же или высшего уровня - дети закончились
+                break
+            
+            if next_level == current_level + 1:
+                # Непосредственный ребёнок
+                children[row].append(next_row)
+    
+    return children
 
 def recalc_totals(ws):
-    """Пересчитывает все итоговые строки в файле с учётом иерархии
+    """Пересчитывает все итоговые строки в файле используя ДЕРЕВО иерархии
     
-    Иерархия суммирования (строгая, без дублирования):
-    Документы → Договоры → Контрагенты → Филиалы → Итого
-    
-    ВАЖНО: Если у контрагента нет договоров, НЕ суммируем документы напрямую.
-    Контрагент уже содержит сумму в исходном файле.
+    Алгоритм:
+    1. Строим дерево: филиал → контрагент → промежуточные → документы
+    2. Считаем снизу вверх: каждый родитель = сумма его непосредственных детей
+    3. Это исключает двойное суммирование
     """
-    print("\n=== ПЕРЕСЧЁТ ИТОГОВ ===")
+    print("\n=== ПЕРЕСЧЁТ ИТОГОВ (ДЕРЕВО) ===")
 
-    filials, kontragents, dogovors, documents, total_row = find_structure(ws)
+    filials, kontragents, intermediates, documents, total_row = find_structure(ws)
 
     print(f"Найдено: филиалов={len(filials)}, контрагентов={len(kontragents)}, "
-          f"договоров={len(dogovors)}, документов={len(documents)}")
+          f"промежуточных={len(intermediates)}, документов={len(documents)}")
 
     # Создаём множества для быстрого поиска
+    all_special_rows = set(filials + kontragents + intermediates + documents)
+    if total_row:
+        all_special_rows.add(total_row)
+    
     kontragent_set = set(kontragents)
     filial_set = set(filials)
-    dogovor_set = set(dogovors)
+    intermediate_set = set(intermediates)
     document_set = set(documents)
 
-    # Функция для суммирования значений ТОЛЬКО для указанных строк
-    def sum_rows(rows, col):
-        total = 0
-        for r in rows:
-            val = get_cell_value(ws, r, col)
-            if isinstance(val, (int, float)):
-                total += val
-        return total
+    # Строим дерево иерархии
+    children = build_tree_hierarchy(filials, kontragents, intermediates, documents)
+    
+    print(f"\nДерево иерархии:")
+    for parent, childs in children.items():
+        if childs:
+            print(f"  Строка {parent} → дети: {childs}")
 
-    # Функция для нахождения максимального значения дней среди указанных строк
-    def max_days_in_rows(rows):
-        max_val = 0
-        for r in rows:
-            val = get_cell_value(ws, r, COLUMNS['DAYS'])
-            if isinstance(val, (int, float)) and val > max_val:
-                max_val = val
-        return max_val
+    # Функция для получения значения ячейки
+    def get_val(row, col):
+        val = get_cell_value(ws, row, col)
+        return val if isinstance(val, (int, float)) else 0
 
-    # 1. Пересчитываем договоры (суммируем документы под ними)
-    for i, dog_row in enumerate(dogovors):
-        # Находим документы, принадлежащие этому договору
-        doc_rows = []
-        for r in range(dog_row + 1, ws.max_row + 1):
-            if r in dogovor_set or r in kontragent_set or r in filial_set or r == total_row:
-                break
-            if r in document_set:
-                doc_rows.append(r)
+    # Считаем снизу вверх: для каждого родителя суммируем детей
+    # Обрабатываем в обратном порядке (от документов к филиалам)
+    all_rows_sorted = sorted(filials + kontragents + intermediates, reverse=True)
+    
+    calculated_rows = set()  # Отслеживаем уже пересчитанные строки
 
-        if doc_rows:
-            print(f"Договор стр.{dog_row}: документы {doc_rows}")
-
-            # Суммируем все денежные колонки по документам
+    for parent_row in all_rows_sorted:
+        childs = children.get(parent_row, [])
+        
+        if not childs:
+            # Нет детей - пропускаем (оставляем значение из файла)
+            print(f"Строка {parent_row}: нет детей, пропускаем")
+            continue
+        
+        # Проверяем, есть ли среди детей уже пересчитанные строки
+        # Если да - используем их значения (они уже содержат сумму своих детей)
+        # Если нет - суммируем документы напрямую
+        
+        has_calculated_childs = any(c in calculated_rows for c in childs)
+        
+        if has_calculated_childs:
+            # Среди детей есть уже пересчитанные - суммируем их значения
+            # Это означает, что дети - это промежуточные уровни
+            print(f"Строка {parent_row}: суммируем пересчитанных детей {childs}")
+            
             for col in SUM_COLUMNS:
-                total = sum_rows(doc_rows, col)
-                safe_set_number_format(ws, dog_row, col, total)
-
-            # Для дней берём максимальное значение среди документов
-            max_day = max_days_in_rows(doc_rows)
-            safe_set_value(ws, dog_row, COLUMNS['DAYS'], max_day)
-
-    # 2. Пересчитываем контрагентов (суммируем ТОЛЬКО договоры под ними)
-    # ВАЖНО: Если нет договоров - НЕ трогаем контрагента!
-    # Контрагент уже содержит правильную сумму в исходном файле.
-    # Это предотвращает двойное суммирование.
-    for i, kontr_row in enumerate(kontragents):
-        # Находим договоры, принадлежащие этому контрагенту
-        dog_rows = []
-        for r in range(kontr_row + 1, ws.max_row + 1):
-            if r in kontragent_set or r in filial_set or r == total_row:
-                break
-            if r in dogovor_set:
-                dog_rows.append(r)
-
-        if dog_rows:
-            print(f"Контрагент стр.{kontr_row}: договоры {dog_rows}")
-
-            # Суммируем ВСЕ денежные колонки по договорам
-            for col in SUM_COLUMNS:
-                total = sum_rows(dog_rows, col)
-                safe_set_number_format(ws, kontr_row, col, total)
-
-            max_day = max_days_in_rows(dog_rows)
-            safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
+                total = sum(get_val(c, col) for c in childs)
+                safe_set_number_format(ws, parent_row, col, total)
+            
+            # Для дней берём максимум
+            max_day = max((get_val(c, COLUMNS['DAYS']) for c in childs), default=0)
+            safe_set_value(ws, parent_row, COLUMNS['DAYS'], max_day)
         else:
-            # Нет договоров - НЕ трогаем контрагента
-            # Он уже содержит правильную сумму из исходного файла
-            print(f"Контрагент стр.{kontr_row}: нет договоров, пропускаем (используем значение из файла)")
-
-    # 3. Пересчитываем филиалы (суммируем контрагентов под ними)
-    for i, fil_row in enumerate(filials):
-        # Находим контрагентов, принадлежащие этому филиалу
-        kontr_rows = []
-        for r in range(fil_row + 1, ws.max_row + 1):
-            if r in filial_set or r == total_row:
-                break
-            if r in kontragent_set:
-                kontr_rows.append(r)
-
-        if kontr_rows:
-            print(f"Филиал стр.{fil_row}: контрагенты {kontr_rows}")
-
-            for col in SUM_COLUMNS:
-                total = sum_rows(kontr_rows, col)
-                safe_set_number_format(ws, fil_row, col, total)
-
-            max_day = max_days_in_rows(kontr_rows)
-            safe_set_value(ws, fil_row, COLUMNS['DAYS'], max_day)
+            # Все дети - документы (листья) - суммируем их
+            doc_childs = [c for c in childs if c in document_set]
+            
+            if doc_childs:
+                print(f"Строка {parent_row}: суммируем документы {doc_childs}")
+                
+                for col in SUM_COLUMNS:
+                    total = sum(get_val(c, col) for c in doc_childs)
+                    safe_set_number_format(ws, parent_row, col, total)
+                
+                max_day = max((get_val(c, COLUMNS['DAYS']) for c in doc_childs), default=0)
+                safe_set_value(ws, parent_row, COLUMNS['DAYS'], max_day)
+            else:
+                # Дети - не документы (например, контрагенты без детей)
+                # Оставляем как есть
+                print(f"Строка {parent_row}: дети не документы, пропускаем")
+                continue
+        
+        calculated_rows.add(parent_row)
 
     # 4. Пересчитываем общий итог (суммируем филиалы)
     if total_row and filials:
-        print(f"Общий итог стр.{total_row}: филиалы {filials}")
+        print(f"\nОбщий итог стр.{total_row}: филиалы {filials}")
 
         for col in SUM_COLUMNS:
-            total = sum_rows(filials, col)
+            total = sum(get_val(f, col) for f in filials)
             safe_set_number_format(ws, total_row, col, total)
 
-        max_day = max_days_in_rows(filials)
+        max_day = max((get_val(f, COLUMNS['DAYS']) for f in filials), default=0)
         safe_set_value(ws, total_row, COLUMNS['DAYS'], max_day)
 
-    print("=== ПЕРЕСЧЁТ ИТОГОВ (НИЖНЯЯ ТАБЛИЦА) ЗАВЕРШЕН ===\n")
+    print("=== ПЕРЕСЧЁТ ИТОГОВ (ДЕРЕВО) ЗАВЕРШЕН ===\n")
 
 def update_top_table(ws, total_row):
     """Обновляет верхнюю сводную таблицу (строки 1-8) значениями из итоговой строки"""
