@@ -75,18 +75,52 @@ def safe_set_number_format(ws, row, col, value):
     if row <= 13:  # не трогаем заголовки
         return
     cell = get_cell_to_write(ws, row, col)
+    
+    # Сохраняем существующие стили перед обновлением
+    existing_font = copy(cell.font) if cell.has_style else None
+    existing_fill = copy(cell.fill) if cell.has_style else None
+    existing_border = copy(cell.border) if cell.has_style else None
+    existing_protection = copy(cell.protection) if cell.has_style else None
+    
     cell.value = value
     cell.number_format = '#,##0.00'
     cell.alignment = Alignment(horizontal='right')
+    
+    # Восстанавливаем стили (если они были)
+    if existing_font:
+        cell.font = existing_font
+    if existing_fill:
+        cell.fill = existing_fill
+    if existing_border:
+        cell.border = existing_border
+    if existing_protection:
+        cell.protection = existing_protection
 
 def safe_set_value(ws, row, col, value):
     """Безопасно устанавливает значение (без форматирования)"""
     if row <= 13:
         return
     cell = get_cell_to_write(ws, row, col)
+    
+    # Сохраняем существующие стили перед обновлением
+    existing_font = copy(cell.font) if cell.has_style else None
+    existing_fill = copy(cell.fill) if cell.has_style else None
+    existing_border = copy(cell.border) if cell.has_style else None
+    existing_protection = copy(cell.protection) if cell.has_style else None
+    
     cell.value = value
     # Для дней тоже применяем выравнивание вправо
     cell.alignment = Alignment(horizontal='right')
+    
+    # Восстанавливаем стили (если они были)
+    if existing_font:
+        cell.font = existing_font
+    if existing_fill:
+        cell.fill = existing_fill
+    if existing_border:
+        cell.border = existing_border
+    if existing_protection:
+        cell.protection = existing_protection
 
 def align_numeric_cells(ws):
     """Выравнивает все числовые ячейки по правому краю"""
@@ -96,7 +130,23 @@ def align_numeric_cells(ws):
         for col in NUMERIC_COLUMNS:
             cell = ws.cell(row=row, column=col)
             if cell.value is not None and not is_cell_merged(ws, row, col):
+                # Сохраняем существующие стили
+                existing_font = copy(cell.font) if cell.has_style else None
+                existing_fill = copy(cell.fill) if cell.has_style else None
+                existing_border = copy(cell.border) if cell.has_style else None
+                existing_protection = copy(cell.protection) if cell.has_style else None
+                
                 cell.alignment = Alignment(horizontal='right')
+                
+                # Восстанавливаем стили
+                if existing_font:
+                    cell.font = existing_font
+                if existing_fill:
+                    cell.fill = existing_fill
+                if existing_border:
+                    cell.border = existing_border
+                if existing_protection:
+                    cell.protection = existing_protection
 
 def get_cell_value(ws, row, col):
     """Безопасно получает значение ячейки с учётом объединённых"""
@@ -342,6 +392,96 @@ def update_top_table(ws, total_row):
     print("Верхняя таблица обновлена")
     print("=== ОБНОВЛЕНИЕ ВЕРХНЕЙ ТАБЛИЦЫ ЗАВЕРШЕНО ===\n")
 
+def copy_worksheet_full(ws, wb):
+    """Полное копирование листа с сохранением ВСЕГО форматирования"""
+    new_ws = wb.create_sheet(ws.title)
+    
+    # 1. Копируем все ячейки с полным форматированием
+    print(f"Копирование ячеек листа '{ws.title}'...")
+    for row in ws.iter_rows():
+        for cell in row:
+            new_cell = new_ws.cell(row=cell.row, column=cell.column, value=cell.value)
+            if cell.has_style:
+                new_cell.font = copy(cell.font)
+                new_cell.border = copy(cell.border)
+                new_cell.fill = copy(cell.fill)
+                new_cell.number_format = cell.number_format
+                new_cell.alignment = copy(cell.alignment)
+                new_cell.protection = copy(cell.protection)
+            # Копируем тип данных (формулы)
+            if cell.data_type == 'f':
+                new_cell.data_type = 'f'
+    
+    # 2. Копируем объединённые ячейки
+    for merged_range in ws.merged_cells.ranges:
+        new_ws.merge_cells(str(merged_range))
+    
+    # 3. Копируем размеры колонок и группировку
+    for col_letter, col_dim in ws.column_dimensions.items():
+        new_ws.column_dimensions[col_letter].width = col_dim.width
+        if col_dim.outline_level:
+            new_ws.column_dimensions[col_letter].outline_level = col_dim.outline_level
+        if col_dim.hidden:
+            new_ws.column_dimensions[col_letter].hidden = col_dim.hidden
+    
+    # 4. Копируем размеры строк, группировку и скрытие
+    for row_num, row_dim in ws.row_dimensions.items():
+        new_ws.row_dimensions[row_num].height = row_dim.height
+        if row_dim.outline_level:
+            new_ws.row_dimensions[row_num].outline_level = row_dim.outline_level
+        if row_dim.hidden:
+            new_ws.row_dimensions[row_num].hidden = row_dim.hidden
+    
+    # 5. Копируем настройки группировки (summary below/right)
+    if hasattr(ws.sheet_properties, 'outlinePr') and ws.sheet_properties.outlinePr:
+        new_ws.sheet_properties.outlinePr.summaryBelow = ws.sheet_properties.outlinePr.summaryBelow
+        new_ws.sheet_properties.outlinePr.summaryRight = ws.sheet_properties.outlinePr.summaryRight
+    
+    # 6. Копируем настройки печати и страницы
+    if ws.print_options:
+        for attr in ['grid_lines', 'grid_lines_set', 'horizontal_centered', 'vertical_centered']:
+            if hasattr(ws.print_options, attr):
+                setattr(new_ws.print_options, attr, getattr(ws.print_options, attr))
+    
+    if ws.page_setup:
+        for attr in ['orientation', 'paperSize', 'scale', 'fitToHeight', 'fitToWidth',
+                     'pageOrder', 'blackAndWhite', 'draft', 'cellComments', 'errors']:
+            if hasattr(ws.page_setup, attr) and getattr(ws.page_setup, attr) is not None:
+                setattr(new_ws.page_setup, attr, getattr(ws.page_setup, attr))
+    
+    if ws.page_margins:
+        for attr in ['left', 'right', 'top', 'bottom', 'header', 'footer']:
+            if hasattr(ws.page_margins, attr):
+                setattr(new_ws.page_margins, attr, getattr(ws.page_margins, attr))
+    
+    # 7. Копируем freeze panes
+    if ws.sheet_view and ws.sheet_view.pane:
+        from openpyxl.worksheet.views import Pane
+        pane = ws.sheet_view.pane
+        new_ws.sheet_view.pane = Pane(
+            active_pane=pane.activePane,
+            state=pane.state,
+            top_left_cell=pane.topLeftCell,
+            x_split=pane.xSplit,
+            y_split=pane.ySplit
+        )
+    
+    # 8. Копируем автофильтр
+    if ws.auto_filter.ref:
+        new_ws.auto_filter.ref = ws.auto_filter.ref
+    
+    # 9. Копируем conditional formatting
+    for cf_rule in ws.conditional_formatting._cf_rules:
+        new_ws.conditional_formatting._cf_rules.append(cf_rule)
+    
+    # 10. Копируем таблицы (table)
+    if hasattr(ws, 'tables') and ws.tables:
+        for table in ws.tables:
+            new_ws.tables.add(table)
+    
+    print(f"Лист '{ws.title}' скопирован с полным форматированием")
+    return new_ws
+
 @app.route('/save-excel', methods=['POST'])
 def save_excel():
     try:
@@ -424,7 +564,7 @@ def save_excel():
         # data уже содержит все поля summaryData (updatedDocuments, currentDayData, summaryDT и т.д.)
         print(f"\n=== Ключи в data: {list(data.keys())}")
 
-        # 1. Лист «Свод ДЗ СИ УАТ» — копируем из загруженного файла
+        # 1. Лист «Свод ДЗ СИ УАТ» — копируем из загруженного файла с ПОЛНЫМ форматированием
         siuat_file = request.files.get('siUatFile')
         if siuat_file and siuat_file.filename:
             print(f"\n=== ДОБАВЛЯЕМ ЛИСТ 'Свод ДЗ СИ УАТ' из файла {siuat_file.filename} ===")
@@ -432,62 +572,8 @@ def save_excel():
                 siuat_wb = openpyxl.load_workbook(io.BytesIO(siuat_file.read()))
                 siuat_ws = siuat_wb.active
 
-                # Копируем ячейки, стили, объединённые диапазоны вручную
-                new_ws = wb.create_sheet('Свод ДЗ СИ УАТ')
-
-                # Копируем все ячейки с полным форматированием
-                for row in siuat_ws.iter_rows(min_row=1, max_row=siuat_ws.max_row,
-                                               min_col=1, max_col=siuat_ws.max_column):
-                    for cell in row:
-                        new_cell = new_ws.cell(row=cell.row, column=cell.column, value=cell.value)
-                        if cell.has_style:
-                            new_cell.font = copy(cell.font)
-                            new_cell.border = copy(cell.border)
-                            new_cell.fill = copy(cell.fill)
-                            new_cell.number_format = cell.number_format
-                            new_cell.alignment = copy(cell.alignment)
-                            new_cell.protection = copy(cell.protection)
-
-                # Копируем объединённые ячейки
-                for merged_range in siuat_ws.merged_cells.ranges:
-                    new_ws.merge_cells(str(merged_range))
-
-                # Копируем размеры колонок и группировку
-                for col_letter, col_dim in siuat_ws.column_dimensions.items():
-                    new_ws.column_dimensions[col_letter].width = col_dim.width
-                    if col_dim.outline_level:
-                        new_ws.column_dimensions[col_letter].outline_level = col_dim.outline_level
-                    if col_dim.hidden:
-                        new_ws.column_dimensions[col_letter].hidden = col_dim.hidden
-
-                # Копируем размеры строк, группировку и скрытие
-                for row_num, row_dim in siuat_ws.row_dimensions.items():
-                    new_ws.row_dimensions[row_num].height = row_dim.height
-                    if row_dim.outline_level:
-                        new_ws.row_dimensions[row_num].outline_level = row_dim.outline_level
-                    if row_dim.hidden:
-                        new_ws.row_dimensions[row_num].hidden = row_dim.hidden
-
-                # Копируем настройки группировки (summary below/right)
-                new_ws.sheet_properties.outlinePr.summaryBelow = siuat_ws.sheet_properties.outlinePr.summaryBelow
-                new_ws.sheet_properties.outlinePr.summaryRight = siuat_ws.sheet_properties.outlinePr.summaryRight
-
-                # Копируем настройки печати и страницы
-                if siuat_ws.print_options:
-                    for attr in ['grid_lines', 'grid_lines_set', 'horizontal_centered', 'vertical_centered']:
-                        if hasattr(siuat_ws.print_options, attr):
-                            setattr(new_ws.print_options, attr, getattr(siuat_ws.print_options, attr))
-
-                if siuat_ws.page_setup:
-                    for attr in ['orientation', 'paperSize', 'scale', 'fitToHeight', 'fitToWidth',
-                                 'pageOrder', 'blackAndWhite', 'draft', 'cellComments', 'errors']:
-                        if hasattr(siuat_ws.page_setup, attr) and getattr(siuat_ws.page_setup, attr) is not None:
-                            setattr(new_ws.page_setup, attr, getattr(siuat_ws.page_setup, attr))
-
-                if siuat_ws.page_margins:
-                    for attr in ['left', 'right', 'top', 'bottom', 'header', 'footer']:
-                        if hasattr(siuat_ws.page_margins, attr):
-                            setattr(new_ws.page_margins, attr, getattr(siuat_ws.page_margins, attr))
+                # Полное копирование с сохранением всего форматирования
+                copy_worksheet_full(siuat_ws, wb)
 
                 print("Лист 'Свод ДЗ СИ УАТ' добавлен с полным форматированием")
             except Exception as e:
@@ -528,58 +614,6 @@ def save_excel():
         print(str(e))
         traceback.print_exc()
         return {'error': str(e)}, 500
-
-if __name__ == '__main__':
-    print("Сервер запущен. Для остановки нажми Ctrl+C\n")
-    app.run(debug=True, port=5000)
-
-
-# ===== ОБРАБОТКА ОПЛАТ ПОСТАВЩИКАМ =====
-@app.route('/save-suppliers', methods=['POST'])
-def save_suppliers():
-    try:
-        file = request.files['file']
-        data = json.loads(request.form['data'])
-
-        print(f"\n=== ПОЛУЧЕН ЗАПРОС ОПЛАТ ПОСТАВЩИКАМ ===")
-        print(f"Файл: {file.filename}")
-        print(f"Сводных таблиц: {len(data.get('pivotTables', []))}")
-
-        wb = openpyxl.load_workbook(io.BytesIO(file.read()))
-
-        # Для каждой сводной таблицы добавляем на соответствующий лист
-        for pivot_info in data.get('pivotTables', []):
-            sheet_name = pivot_info['sheetName']
-            pivot_data = pivot_info['data']
-            pivot_headers = pivot_info['headers']
-
-            if sheet_name not in wb.sheetnames:
-                print(f"Лист '{sheet_name}' не найден, пропускаем")
-                continue
-
-            ws = wb[sheet_name]
-            append_pivot_table(ws, pivot_data, pivot_headers)
-
-        # Сохраняем результат
-        output = io.BytesIO()
-        wb.save(output)
-        output.seek(0)
-
-        print("\n=== ФАЙЛ УСПЕШНО ОБРАБОТАН, ОТПРАВЛЯЕМ ===\n")
-
-        return send_file(
-            output,
-            as_attachment=True,
-            download_name=f'Оплаты_поставщикам_{datetime.now().strftime("%Y-%m-%d")}.xlsx',
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-
-    except Exception as e:
-        print("\n!!! ОШИБКА !!!")
-        print(str(e))
-        traceback.print_exc()
-        return {'error': str(e)}, 500
-
 
 def create_summary_sheet(ws, data):
     """Создаёт лист 'Сводные таблицы' с тремя блоками:
@@ -762,7 +796,6 @@ def create_summary_sheet(ws, data):
 
     print("Лист 'Сводные таблицы' создан")
 
-
 def append_pivot_table(ws, pivot_data, pivot_headers):
     """Добавляет сводную таблицу на существующий лист через 5 строк после данных"""
 
@@ -903,3 +936,6 @@ def append_pivot_table(ws, pivot_data, pivot_headers):
 
     expl_col_letter = openpyxl.utils.get_column_letter(len(pivot_headers) + 3)
     ws.column_dimensions[expl_col_letter].width = 50
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
