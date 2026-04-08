@@ -370,6 +370,8 @@ class ReceiptsManager {
              'Сумма', 'Банк получателя', 'Назначение платежа', 'Дата', 'Файл источника']
         ];
 
+        let totalAmount = 0;
+
         transactions.forEach(t => {
             // Банк получателя
             const bank = t.ourBank || '';
@@ -385,20 +387,43 @@ class ReceiptsManager {
                 t.date || '',
                 t.sourceFile || ''
             ]);
+
+            totalAmount += t.amount;
         });
+
+        // Добавляем итоговую строку
+        data.push([
+            'ИТОГО',
+            '',
+            '',
+            '',
+            totalAmount,
+            '',
+            '',
+            '',
+            ''
+        ]);
 
         // Создание рабочей книги
         const ws = XLSX.utils.aoa_to_sheet(data);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Поступления');
 
-        // Устанавливаем числовой формат для столбца "Сумма"
+        // Устанавливаем числовой формат для столбца "Сумма" (индекс 4)
         const range = XLSX.utils.decode_range(ws['!ref']);
-        for (let row = range.s.r + 1; row <= range.e.r; row++) {
+        for (let row = 1; row <= range.e.r; row++) {
             const cellAddress = XLSX.utils.encode_cell({ r: row, c: 4 });
             if (!ws[cellAddress]) continue;
             ws[cellAddress].t = 'n';
             ws[cellAddress].z = '#,##0.00';
+        }
+
+        // Выделяем итоговую строку жирным
+        const lastRow = range.e.r;
+        for (let col = 0; col <= 8; col++) {
+            const cellAddress = XLSX.utils.encode_cell({ r: lastRow, c: col });
+            if (!ws[cellAddress]) continue;
+            ws[cellAddress].s = { font: { bold: true } };
         }
 
         // Автонастройка ширины столбцов
@@ -416,7 +441,7 @@ class ReceiptsManager {
         ws['!cols'] = colWidths;
 
         // Сохранение файла
-        XLSX.writeFile(wb, `Поступления_${new Date().toISOString().split('T')[0]}.xlsx`);
+        XLSX.writeFile(wb, `Поступления_${new Date().toISOString().split('T')[0]}.xlsx`, { cellStyles: true });
     }
 
     // Метод для очистки поиска

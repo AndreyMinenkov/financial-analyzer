@@ -6,6 +6,9 @@ class App {
         this.receiptsManager = new ReceiptsManager(this.storage);
         this.balancesManager = new BalancesManager(this.storage);
         this.debtManager = new DebtReconciliationManager(this.storage);
+        this.contractorsLibrary = new ContractorsLibrary();
+        this.supplierPayments = new SupplierPaymentsManager(this.contractorsLibrary);
+        this.originalWorkbook = null; // Для хранения оригинального файла поставщиков
         this.init();
     }
 
@@ -81,10 +84,36 @@ class App {
                 this.balancesManager.updateTable();
                 break;
             case 'debt':
-                // При переходе на страницу сверки обновляем статистику, если есть данные
                 this.updateReconciliationUI();
                 break;
+            case 'suppliers':
+                this.updateSuppliersUI();
+                break;
+            case 'library':
+                this.renderLibraryTable();
+                break;
         }
+    }
+
+    updateSuppliersUI() {
+        // Обновляем статистику на странице поставщиков
+        const stats = document.getElementById('suppliersStats');
+        const pivotTables = this.supplierPayments.getPivotTables();
+        const libraryStats = this.contractorsLibrary.getStats();
+
+        if (pivotTables.length > 0) {
+            stats.style.display = 'grid';
+            document.getElementById('suppliersRegistriesCount').textContent = pivotTables.length;
+        }
+
+        // Обновляем статистику на странице библиотеки
+        this.updateLibraryStats();
+    }
+
+    updateLibraryStats() {
+        const libraryStats = this.contractorsLibrary.getStats();
+        document.getElementById('libTotal').textContent = libraryStats.total;
+        document.getElementById('libWithExplanation').textContent = libraryStats.withExplanation;
     }
 
     updateReconciliationUI() {
@@ -217,6 +246,12 @@ class App {
 
         // ===== Обработчики для страницы сверки долгов =====
         this.setupDebtReconciliationListeners();
+
+        // ===== Обработчики для страницы оплат поставщикам =====
+        this.setupSupplierPaymentsListeners();
+
+        // ===== Обработчики для страницы библиотеки =====
+        this.setupLibraryListeners();
     }
 
     setupDebtReconciliationListeners() {
@@ -301,19 +336,74 @@ class App {
             this.performReconciliation();
         });
 
-        // Кнопка экспорта в Excel
+        // Кнопка экспорта
         document.getElementById('exportReconciledBtn').addEventListener('click', () => {
             this.exportReconciledFile();
-        });
-
-        // Кнопка выгрузки просроченных актов в Word
-        document.getElementById('exportOverdueBtn').addEventListener('click', () => {
-            this.exportOverdueActs();
         });
 
         // Кнопка очистки
         document.getElementById('clearReconciliationBtn').addEventListener('click', () => {
             this.clearReconciliationData();
+        });
+
+        // Кнопка настроек сводных таблиц
+        document.getElementById('summarySettingsBtn').addEventListener('click', () => {
+            this.openSummarySettingsModal();
+        });
+
+        // Закрытие модального окна настроек
+        const closeSummaryModal = document.getElementById('closeSummarySettingsModal');
+        closeSummaryModal.addEventListener('click', () => {
+            document.getElementById('summarySettingsModal').classList.remove('active');
+        });
+
+        // Сохранение настроек сводных
+        document.getElementById('saveSummarySettingsBtn').addEventListener('click', () => {
+            this.saveSummarySettings();
+        });
+
+        // Загрузка файла СИ УАТ
+        const selectSiUatBtn = document.getElementById('selectSiUatBtn');
+        const siUatFileInput = document.getElementById('siUatFile');
+        const siUatDropArea = document.getElementById('siUatDropArea');
+        const siUatFileInfo = document.getElementById('siUatFileInfo');
+
+        selectSiUatBtn.addEventListener('click', () => {
+            siUatFileInput.click();
+        });
+
+        siUatFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                this.loadSiUatFile(e.target.files[0]);
+            }
+        });
+
+        siUatDropArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            siUatDropArea.style.borderColor = '#2563eb';
+            siUatDropArea.style.background = 'rgba(37, 99, 235, 0.05)';
+        });
+
+        siUatDropArea.addEventListener('dragleave', () => {
+            siUatDropArea.style.borderColor = '';
+            siUatDropArea.style.background = '';
+        });
+
+        siUatDropArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            siUatDropArea.style.borderColor = '';
+            siUatDropArea.style.background = '';
+
+            if (e.dataTransfer.files.length > 0) {
+                this.loadSiUatFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        // Клик вне модального окна настроек
+        window.addEventListener('click', (e) => {
+            if (e.target === document.getElementById('summarySettingsModal')) {
+                document.getElementById('summarySettingsModal').classList.remove('active');
+            }
         });
     }
 
@@ -465,7 +555,8 @@ class App {
                 this.showReconciliationStats(this.debtManager.getStats());
                 this.showReconciliationLog(this.debtManager.getProcessedLog());
                 document.getElementById('exportReconciledBtn').disabled = false;
-                document.getElementById('exportOverdueBtn').disabled = false;
+                // Обновляем индикатор данных предыдущего дня
+                this.updatePreviousDayIndicator();
                 this.showNotification(result.message, 'success');
             } else {
                 this.showNotification(result.message, 'error');
@@ -513,31 +604,19 @@ class App {
         logSection.style.display = 'block';
     }
 
-    exportReconciledFile() {
+    async exportReconciledFile() {
         try {
-            const result = this.debtManager.exportToExcel();
+            this.showNotification('Выполняется сохранение...', 'info');
+            
+            const result = await this.debtManager.exportToExcel();
             if (result.success) {
                 this.showNotification(result.message, 'success');
-            } else {
+            } else if (result.message) {
                 this.showNotification(result.message, 'error');
             }
         } catch (error) {
-            console.error('Ошибка при сохранении файла:', error);
+            console.error('Ошибка при экспорте:', error);
             this.showNotification('Ошибка при сохранении файла', 'error');
-        }
-    }
-
-    exportOverdueActs() {
-        try {
-            const result = this.debtManager.exportOverdueToExcel();
-            if (result.success) {
-                this.showNotification(result.message, 'success');
-            } else {
-                this.showNotification(result.message, 'error');
-            }
-        } catch (error) {
-            console.error('Ошибка при выгрузке просроченных актов:', error);
-            this.showNotification('Ошибка при выгрузке просроченных актов', 'error');
         }
     }
 
@@ -545,12 +624,147 @@ class App {
         this.debtManager.clearData();
         document.getElementById('debtRegistryFileInfo').innerHTML = 'Файл не выбран';
         document.getElementById('receiptsRegistryFileInfo').innerHTML = 'Файл не выбран';
+        document.getElementById('siUatFileInfo').innerHTML = 'Файл не выбран';
         document.getElementById('reconciliationStats').style.display = 'none';
         document.getElementById('reconciliationLog').style.display = 'none';
         document.getElementById('exportReconciledBtn').disabled = true;
-        document.getElementById('exportOverdueBtn').disabled = true;
         document.getElementById('reconcileBtn').disabled = true;
+        document.getElementById('previousDayIndicator').style.display = 'none';
         this.showNotification('Данные очищены', 'info');
+    }
+
+    // Загрузка файла СИ УАТ
+    async loadSiUatFile(file) {
+        this.showLoading();
+        try {
+            const result = await this.debtManager.loadSiUatFile(file);
+            document.getElementById('siUatFileInfo').innerHTML =
+                `<i class="fas fa-check-circle" style="color: var(--success);"></i> ${file.name}`;
+
+            if (result.success) {
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            this.showNotification('Ошибка загрузки файла СИ УАТ', 'error');
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    // Открытие модального окна настроек сводных
+    openSummarySettingsModal() {
+        // Заполняем поля сводных данных
+        document.getElementById('summaryDtLegal').value = this.debtManager.summaryDT.legal || '';
+        document.getElementById('summaryDtNotRecoverable').value = this.debtManager.summaryDT.notRecoverable || '';
+        document.getElementById('summaryDtRecoverable').value = this.debtManager.summaryDT.recoverable || '';
+
+        document.getElementById('summarySiuatLegal').value = this.debtManager.summarySIUAT.legal || '';
+        document.getElementById('summarySiuatNotRecoverable').value = this.debtManager.summarySIUAT.notRecoverable || '';
+        document.getElementById('summarySiuatRecoverable').value = this.debtManager.summarySIUAT.recoverable || '';
+
+        // Заполняем таблицу данных предыдущего дня
+        this.renderPreviousDayDataTable();
+
+        document.getElementById('summarySettingsModal').classList.add('active');
+    }
+
+    // Отрисовка таблицы данных предыдущего дня
+    renderPreviousDayDataTable() {
+        const tbody = document.getElementById('previousDayDataBody');
+        const currentData = this.debtManager.currentSubdivisionData;
+
+        if (Object.keys(currentData).length === 0) {
+            tbody.innerHTML = '<tr class="empty-row"><td colspan="2">Сначала выполните сверку</td></tr>';
+            return;
+        }
+
+        // Получаем данные предыдущего дня
+        const previousData = this.debtManager.getPreviousDayData();
+
+        let html = '';
+        // Сортируем филиалы по названию
+        const sortedFilials = Object.keys(currentData).sort();
+
+        sortedFilials.forEach(filial => {
+            const currentAmount = currentData[filial] || 0;
+            const previousAmount = previousData[filial] || 0;
+            html += `<tr>
+                <td>${this.escapeHtml(filial)}</td>
+                <td><input type="number" step="0.01" class="prev-day-input" data-filial="${this.escapeHtml(filial)}" value="${previousAmount}"></td>
+            </tr>`;
+        });
+
+        tbody.innerHTML = html;
+    }
+
+    // Сохранение настроек сводных
+    saveSummarySettings() {
+        // Сохраняем сводные данные ДТ
+        this.debtManager.summaryDT = {
+            legal: parseFloat(document.getElementById('summaryDtLegal').value) || 0,
+            notRecoverable: parseFloat(document.getElementById('summaryDtNotRecoverable').value) || 0,
+            recoverable: parseFloat(document.getElementById('summaryDtRecoverable').value) || 0
+        };
+
+        // Сохраняем сводные данные СИ УАТ
+        this.debtManager.summarySIUAT = {
+            legal: parseFloat(document.getElementById('summarySiuatLegal').value) || 0,
+            notRecoverable: parseFloat(document.getElementById('summarySiuatNotRecoverable').value) || 0,
+            recoverable: parseFloat(document.getElementById('summarySiuatRecoverable').value) || 0
+        };
+
+        // Сохраняем данные предыдущего дня из таблицы (единый ключ для ручных данных)
+        const inputs = document.querySelectorAll('.prev-day-input');
+        const previousDayData = {};
+        inputs.forEach(input => {
+            const filial = input.dataset.filial;
+            const value = parseFloat(input.value) || 0;
+            previousDayData[filial] = value;
+        });
+
+        // Сохраняем в localStorage под единым ключом
+        try {
+            localStorage.setItem('previousDayDebt_manual', JSON.stringify(previousDayData));
+        } catch (e) {
+            console.error('Ошибка сохранения данных предыдущего дня:', e);
+        }
+
+        // Сохраняем сводные данные
+        this.debtManager.saveSummaryData();
+
+        // Закрываем модалку
+        document.getElementById('summarySettingsModal').classList.remove('active');
+
+        // Обновляем индикатор
+        this.updatePreviousDayIndicator();
+
+        this.showNotification('Настройки сводных таблиц сохранены', 'success');
+    }
+
+    // Обновление индикатора данных предыдущего дня
+    updatePreviousDayIndicator() {
+        const indicator = document.getElementById('previousDayIndicator');
+        const indicatorText = document.getElementById('previousDayIndicatorText');
+        const previousData = this.debtManager.getPreviousDayData();
+
+        if (Object.keys(previousData).length > 0) {
+            indicator.style.display = 'flex';
+            indicator.className = 'previous-day-indicator loaded';
+            indicatorText.textContent = `Данные за предыдущий день загружены (${Object.keys(previousData).length} подразделений)`;
+        } else {
+            indicator.style.display = 'flex';
+            indicator.className = 'previous-day-indicator warning';
+            indicatorText.textContent = 'Данные за предыдущий день не заполнены. Откройте Настройки сводных.';
+        }
+    }
+
+    // Экранирование HTML
+    escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
     }
 
     handleFileSelect(files) {
@@ -563,7 +777,22 @@ class App {
 
     updateFileList() {
         const fileListContent = document.getElementById('fileListContent');
+        const fileListSection = document.getElementById('fileListSection');
+        const statsSection = document.getElementById('statsSection');
         const files = this.storage.getFiles();
+
+        // Показываем/скрываем секции в зависимости от наличия файлов
+        if (files.length === 0) {
+            fileListSection.style.display = 'none';
+            statsSection.style.display = 'none';
+            return;
+        }
+
+        // Показываем секции при наличии файлов
+        fileListSection.style.display = 'block';
+        if (this.storage.getTransactions().length > 0) {
+            statsSection.style.display = 'block';
+        }
 
         if (files.length === 0) {
             fileListContent.innerHTML = '<p class="empty-message">Файлы не загружены</p>';
@@ -571,7 +800,7 @@ class App {
         }
 
         let html = '';
-        files.forEach((file, index) => {
+        files.forEach((file) => {
             const size = file.size > 1024 * 1024
                 ? `${(file.size / (1024 * 1024)).toFixed(2)} MB`
                 : `${(file.size / 1024).toFixed(2)} KB`;
@@ -639,6 +868,12 @@ class App {
         document.getElementById('filesCount').textContent = files.length;
         document.getElementById('operationsCount').textContent = transactions.length;
         document.getElementById('accountsCount').textContent = Object.keys(accounts).length;
+
+        // Показываем статистику только если есть обработанные данные
+        const statsSection = document.getElementById('statsSection');
+        if (transactions.length > 0) {
+            statsSection.style.display = 'block';
+        }
     }
 
     showLoading() {
@@ -677,6 +912,663 @@ class App {
 
     loadCurrentPage() {
         this.updatePageData(this.currentPage);
+    }
+
+    // ===== ОБРАБОТЧИКИ ДЛЯ СТРАНИЦЫ ОПЛАТ ПОСТАВЩИКАМ =====
+    setupSupplierPaymentsListeners() {
+        // Загрузка файла
+        const uploadBtn = document.getElementById('uploadSuppliersBtn');
+        const fileInput = document.getElementById('suppliersFileUpload');
+
+        uploadBtn.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', async (e) => {
+            if (e.target.files.length > 0) {
+                await this.handleSuppliersFileUpload(e.target.files[0]);
+                e.target.value = '';
+            }
+        });
+
+        // Переход в библиотеку
+        document.getElementById('goToLibraryBtn').addEventListener('click', () => {
+            this.switchPage('library');
+        });
+
+        // Закрытие модальных окон (только для депозитов и контрагентов дебиторки)
+        document.querySelectorAll('.close-modal').forEach(btn => {
+            btn.addEventListener('click', () => {
+                btn.closest('.modal').classList.remove('active');
+            });
+        });
+
+        // Закрытие по клику вне модального окна
+        window.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) {
+                e.target.classList.remove('active');
+            }
+        });
+    }
+
+    async handleSuppliersFileUpload(file) {
+        this.showLoading();
+        try {
+            // Сохраняем оригинальный файл для экспорта
+            this.originalSuppliersFile = file;
+
+            const result = await this.supplierPayments.loadExcelFile(file);
+            if (result.success) {
+                this.renderSuppliersContent();
+                this.updateSuppliersUI();
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            console.error('Ошибка загрузки файла поставщиков:', error);
+            this.showNotification('Ошибка загрузки файла', 'error');
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    renderSuppliersContent() {
+        const container = document.getElementById('suppliersContent');
+        const pivotTables = this.supplierPayments.getPivotTables();
+
+        if (pivotTables.length === 0) {
+            container.innerHTML = `
+                <div class="card" style="text-align: center; padding: 48px;">
+                    <i class="fas fa-cloud-upload-alt" style="font-size: 48px; color: var(--text-tertiary); margin-bottom: 16px;"></i>
+                    <p style="color: var(--text-secondary); font-size: 15px;">Загрузите Excel-файл с реестрами заявок для формирования сводных таблиц</p>
+                </div>
+            `;
+            return;
+        }
+
+        let html = '';
+
+        pivotTables.forEach((pivot, index) => {
+            html += `
+                <div class="card" style="margin-bottom: 24px;">
+                    <h3 style="margin-bottom: 16px; font-size: 16px; font-weight: 600;">
+                        <i class="fas fa-table" style="color: var(--primary);"></i> ${pivot.sheetName}
+                    </h3>
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Контрагент</th>
+                                    ${pivot.pivotHeaders.map(h => `<th>${h}</th>`).join('')}
+                                    <th>Итого</th>
+                                    <th>Пояснение</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+            `;
+
+            let totals = {};
+            pivot.pivotHeaders.forEach(h => totals[h] = 0);
+            let grandTotal = 0;
+
+            pivot.pivotData.forEach(row => {
+                html += `<tr>`;
+                html += `<td><strong>${row.contractor}</strong></td>`;
+
+                pivot.pivotHeaders.forEach(h => {
+                    const value = row[h] || 0;
+                    totals[h] = (totals[h] || 0) + value;
+                    html += `<td class="number-cell">${this.storage.formatNumber(value)}</td>`;
+                });
+
+                grandTotal += row.total;
+                html += `<td class="number-cell" style="font-weight: 600;">${this.storage.formatNumber(row.total)}</td>`;
+                html += `<td style="color: var(--text-secondary); font-size: 13px;">${row.explanation || ''}</td>`;
+                html += `</tr>`;
+            });
+
+            // Итоговая строка
+            html += `<tr style="background: var(--bg-tertiary); font-weight: 600;">`;
+            html += `<td>ИТОГО</td>`;
+            pivot.pivotHeaders.forEach(h => {
+                html += `<td class="number-cell">${this.storage.formatNumber(totals[h] || 0)}</td>`;
+            });
+            html += `<td class="number-cell">${this.storage.formatNumber(grandTotal)}</td>`;
+            html += `<td></td>`;
+            html += `</tr>`;
+
+            html += `
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        });
+
+        // Кнопка экспорта
+        html += `
+            <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px;">
+                <button id="exportSuppliersBtn" class="btn btn-success">
+                    <i class="fas fa-file-excel"></i> Экспорт в Excel
+                </button>
+            </div>
+        `;
+
+        container.innerHTML = html;
+
+        // Обработчик экспорта
+        document.getElementById('exportSuppliersBtn').addEventListener('click', () => {
+            this.exportSuppliersToExcel();
+        });
+    }
+
+    async exportSuppliersToExcel() {
+        this.showLoading();
+        try {
+            const result = await this.supplierPayments.exportToExcel(this.originalSuppliersFile);
+            if (result.success) {
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            console.error('Ошибка экспорта:', error);
+            this.showNotification('Ошибка при экспорте', 'error');
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    // ===== СТРАНИЦА БИБЛИОТЕКИ КОНТРАГЕНТОВ =====
+    setupLibraryListeners() {
+        // Инициализация фильтров
+        this.libraryFilters = {
+            name: new Set(),
+            organization: new Set(),
+            explanation: new Set()
+        };
+        this.librarySearchTerm = '';
+        this.selectedRowId = null;
+
+        // Добавление контрагента
+        document.getElementById('libAddBtn').addEventListener('click', () => {
+            this.openAddContractorModal();
+        });
+
+        // Импорт
+        document.getElementById('libImportBtn').addEventListener('click', () => {
+            document.getElementById('libraryImportFile').click();
+        });
+
+        document.getElementById('libraryImportFile').addEventListener('change', async (e) => {
+            if (e.target.files.length > 0) {
+                await this.importLibraryFromExcel(e.target.files[0]);
+                e.target.value = '';
+            }
+        });
+
+        // Экспорт
+        document.getElementById('libExportBtn').addEventListener('click', () => {
+            this.contractorsLibrary.exportToExcel();
+        });
+
+        // Очистка
+        document.getElementById('libClearBtn').addEventListener('click', () => {
+            const result = this.contractorsLibrary.clearAll();
+            if (result.success) {
+                this.renderLibraryTable();
+                this.updateLibraryStats();
+                this.showNotification(result.message, 'info');
+            }
+        });
+
+        // Поиск
+        document.getElementById('librarySearch').addEventListener('input', (e) => {
+            this.librarySearchTerm = e.target.value;
+            this.renderLibraryTable();
+        });
+
+        // Очистка поиска
+        document.getElementById('libClearSearchBtn').addEventListener('click', () => {
+            document.getElementById('librarySearch').value = '';
+            this.librarySearchTerm = '';
+            this.renderLibraryTable();
+        });
+
+        // Кнопки фильтров в заголовках
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const filterType = btn.dataset.filter;
+                this.toggleFilterDropdown(filterType, btn);
+            });
+        });
+
+        // Закрытие фильтров
+        document.querySelectorAll('.filter-close').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const filterType = btn.dataset.filter;
+                this.closeFilterDropdown(filterType);
+            });
+        });
+
+        // Поиск внутри фильтров
+        document.querySelectorAll('[data-filter-search]').forEach(input => {
+            input.addEventListener('input', (e) => {
+                const filterType = e.target.dataset.filterSearch;
+                this.filterOptionsSearch(filterType, e.target.value);
+            });
+        });
+
+        // Чекбокс "Выбрать все"
+        document.querySelectorAll('.select-all-cb').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                const filterType = e.target.dataset.filterSelect;
+                this.toggleSelectAll(filterType, e.target.checked);
+            });
+        });
+
+        // Применить фильтр
+        document.querySelectorAll('[data-filter-apply]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const filterType = btn.dataset.filterApply;
+                this.applyFilter(filterType);
+            });
+        });
+
+        // Сбросить фильтр
+        document.querySelectorAll('[data-filter-clear]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const filterType = btn.dataset.filterClear;
+                this.clearFilter(filterType);
+            });
+        });
+
+        // Сохранение контрагента
+        document.getElementById('saveContractorBtn').addEventListener('click', () => {
+            this.saveContractor();
+        });
+
+        // Закрытие фильтров при клике на оверлей
+        document.getElementById('filterDropdowns').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('filterDropdowns')) {
+                this.closeAllFilterDropdowns();
+            }
+        });
+
+        // Закрытие фильтров при клике вне
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.filter-dropdown') && !e.target.closest('.filter-btn')) {
+                this.closeAllFilterDropdowns();
+            }
+        });
+
+        // Горячие клавиши
+        document.addEventListener('keydown', (e) => {
+            // Escape закрывает фильтры
+            if (e.key === 'Escape') {
+                this.closeAllFilterDropdowns();
+            }
+            // Enter открывает редактирование выбранной строки
+            if (e.key === 'Enter' && this.selectedRowId) {
+                this.openEditContractorModal(this.selectedRowId);
+            }
+        });
+    }
+
+    toggleFilterDropdown(filterType, btn) {
+        const dropdown = document.getElementById(`filter${this.capitalizeFirst(filterType)}`);
+        const isOpen = dropdown.style.display === 'block';
+
+        // Закрываем все фильтры
+        this.closeAllFilterDropdowns();
+
+        if (!isOpen) {
+            // Позиционируем фильтр под кнопкой
+            const rect = btn.getBoundingClientRect();
+            dropdown.style.left = rect.left + 'px';
+            dropdown.style.top = (rect.bottom + 4) + 'px';
+            dropdown.style.display = 'block';
+            document.getElementById('filterDropdowns').style.display = 'flex';
+
+            // Заполняем опции
+            this.populateFilterOptions(filterType);
+
+            // Подсвечиваем кнопку
+            btn.classList.add('active');
+        }
+    }
+
+    closeFilterDropdown(filterType) {
+        const dropdown = document.getElementById(`filter${this.capitalizeFirst(filterType)}`);
+        dropdown.style.display = 'none';
+        document.querySelector(`.filter-btn[data-filter="${filterType}"]`)?.classList.remove('active');
+
+        // Проверяем, есть ли открытые фильтры
+        const anyOpen = document.querySelectorAll('.filter-dropdown[style*="block"]');
+        if (anyOpen.length === 0) {
+            document.getElementById('filterDropdowns').style.display = 'none';
+        }
+    }
+
+    toggleSelectAll(filterType, checked) {
+        const container = document.getElementById(`filterOptions${this.capitalizeFirst(filterType)}`);
+        const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+        checkboxes.forEach(cb => {
+            cb.checked = checked;
+        });
+    }
+
+    updateSelectAllState(filterType) {
+        const container = document.getElementById(`filterOptions${this.capitalizeFirst(filterType)}`);
+        const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+        const selectAllCb = document.querySelector(`.select-all-cb[data-filter-select="${filterType}"]`);
+
+        if (checkboxes.length === 0) return;
+
+        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+        selectAllCb.checked = allChecked;
+    }
+
+    closeAllFilterDropdowns() {
+        ['name', 'organization', 'explanation'].forEach(type => {
+            this.closeFilterDropdown(type);
+        });
+    }
+
+    populateFilterOptions(filterType) {
+        const contractors = this.contractorsLibrary.getAll();
+        const container = document.getElementById(`filterOptions${this.capitalizeFirst(filterType)}`);
+
+        // Собираем уникальные значения
+        const values = new Map();
+        contractors.forEach(c => {
+            const val = c[filterType] || '(пусто)';
+            values.set(val, (values.get(val) || 0) + 1);
+        });
+
+        // Сортируем
+        const sorted = Array.from(values.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
+        // Получаем текущие выбранные
+        const selected = this.libraryFilters[filterType];
+
+        let html = '';
+        sorted.forEach(([value, count]) => {
+            const isChecked = selected.size === 0 || selected.has(value);
+            html += `
+                <label class="filter-option">
+                    <input type="checkbox" value="${this.escapeHtml(value)}" ${isChecked ? 'checked' : ''}>
+                    <span class="filter-option-label" title="${this.escapeHtml(value)}">${this.escapeHtml(value)}</span>
+                    <span class="filter-option-count">${count}</span>
+                </label>
+            `;
+        });
+
+        container.innerHTML = html;
+
+        // Обработчики чекбоксов
+        container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            cb.addEventListener('change', () => {
+                this.updateSelectAllState(filterType);
+            });
+            cb.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+        });
+    }
+
+    filterOptionsSearch(filterType, searchTerm) {
+        const container = document.getElementById(`filterOptions${this.capitalizeFirst(filterType)}`);
+        const options = container.querySelectorAll('.filter-option');
+        const term = searchTerm.toLowerCase();
+
+        options.forEach(option => {
+            const label = option.querySelector('.filter-option-label').textContent.toLowerCase();
+            option.style.display = label.includes(term) ? '' : 'none';
+        });
+    }
+
+    applyFilter(filterType) {
+        const container = document.getElementById(`filterOptions${this.capitalizeFirst(filterType)}`);
+        const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+        const selected = new Set();
+
+        checkboxes.forEach(cb => {
+            if (cb.checked) {
+                selected.add(cb.value);
+            }
+        });
+
+        // Если выбраны все — очищаем фильтр (показываем всё)
+        const totalOptions = container.querySelectorAll('.filter-option').length;
+        if (selected.size === totalOptions || selected.size === 0) {
+            this.libraryFilters[filterType] = new Set();
+        } else {
+            this.libraryFilters[filterType] = selected;
+        }
+
+        this.closeFilterDropdown(filterType);
+        this.renderLibraryTable();
+    }
+
+    clearFilter(filterType) {
+        this.libraryFilters[filterType] = new Set();
+        this.closeFilterDropdown(filterType);
+        this.renderLibraryTable();
+    }
+
+    capitalizeFirst(str) {
+        return str.charAt(0).toUpperCase() + str.slice(1);
+    }
+
+    escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    renderLibraryTable() {
+        const tbody = document.getElementById('libraryTableBody');
+        let contractors = this.contractorsLibrary.getAll();
+
+        // Фильтрация по поиску
+        if (this.librarySearchTerm) {
+            const term = this.librarySearchTerm.toLowerCase();
+            contractors = contractors.filter(c =>
+                c.name.toLowerCase().includes(term) ||
+                (c.organization && c.organization.toLowerCase().includes(term)) ||
+                (c.explanation && c.explanation.toLowerCase().includes(term))
+            );
+        }
+
+        // Фильтрация по чекбоксам
+        for (const [filterType, selectedValues] of Object.entries(this.libraryFilters)) {
+            if (selectedValues.size > 0) {
+                contractors = contractors.filter(c => {
+                    const val = c[filterType] || '(пусто)';
+                    return selectedValues.has(val);
+                });
+            }
+        }
+
+        this.updateLibraryStats();
+
+        if (contractors.length === 0) {
+            tbody.innerHTML = `
+                <tr class="empty-row">
+                    <td colspan="4">${this.librarySearchTerm || Object.values(this.libraryFilters).some(s => s.size > 0) ? 'Ничего не найдено' : 'Библиотека пуста'}</td>
+                </tr>
+            `;
+            this.selectedRowId = null;
+            return;
+        }
+
+        let html = '';
+        contractors.forEach(contractor => {
+            const isSelected = contractor.id === this.selectedRowId;
+            html += `
+                <tr data-id="${contractor.id}" ${isSelected ? 'class="selected"' : ''}>
+                    <td><strong>${contractor.name}</strong></td>
+                    <td>${contractor.organization || '<span style="color: var(--text-tertiary);">—</span>'}</td>
+                    <td style="color: var(--text-secondary); font-size: 12px;">${contractor.explanation || '<span style="color: var(--text-tertiary);">—</span>'}</td>
+                    <td class="actions-cell">
+                        <button class="btn btn-sm btn-secondary edit-contractor" data-id="${contractor.id}" title="Редактировать">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn btn-sm btn-danger delete-contractor" data-id="${contractor.id}" title="Удалить">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+
+        tbody.innerHTML = html;
+
+        // Выделение строк по клику
+        tbody.querySelectorAll('tr[data-id]').forEach(row => {
+            // Одинарный клик — выделение
+            row.addEventListener('click', (e) => {
+                // Не выделяем если клик по кнопкам
+                if (e.target.closest('.btn')) return;
+                this.selectRow(row.dataset.id);
+            });
+
+            // Двойной клик — редактирование
+            row.addEventListener('dblclick', (e) => {
+                if (e.target.closest('.btn')) return;
+                this.openEditContractorModal(row.dataset.id);
+            });
+        });
+
+        // Обработчики редактирования
+        tbody.querySelectorAll('.edit-contractor').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.openEditContractorModal(btn.dataset.id);
+            });
+        });
+
+        // Обработчики удаления
+        tbody.querySelectorAll('.delete-contractor').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const contractor = this.contractorsLibrary.contractors.find(c => c.id === btn.dataset.id);
+                if (contractor && confirm(`Удалить "${contractor.name}"?`)) {
+                    this.contractorsLibrary.removeContractor(btn.dataset.id);
+                    if (this.selectedRowId === btn.dataset.id) {
+                        this.selectedRowId = null;
+                    }
+                    this.renderLibraryTable();
+                    this.updateLibraryStats();
+                    this.showNotification('Контрагент удалён', 'success');
+                }
+            });
+        });
+    }
+
+    selectRow(id) {
+        this.selectedRowId = id;
+
+        // Обновляем визуальное выделение — только строки с data-id
+        const tbody = document.getElementById('libraryTableBody');
+        tbody.querySelectorAll('tr[data-id]').forEach(row => {
+            row.classList.toggle('selected', row.dataset.id === id);
+        });
+    }
+
+    openAddContractorModal() {
+        document.getElementById('contractorModalTitle').textContent = 'Добавить контрагента';
+        document.getElementById('contractorId').value = '';
+        document.getElementById('contractorName').value = '';
+        document.getElementById('contractorOrganization').value = '';
+        document.getElementById('contractorExplanation').value = '';
+        document.getElementById('addContractorModal').classList.add('active');
+
+        // Фокус на первое поле
+        setTimeout(() => document.getElementById('contractorName').focus(), 100);
+
+        // Enter для сохранения
+        document.getElementById('contractorForm').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                this.saveContractor();
+            }
+        });
+    }
+
+    openEditContractorModal(id) {
+        const contractor = this.contractorsLibrary.contractors.find(c => c.id === id);
+        if (!contractor) return;
+
+        document.getElementById('contractorModalTitle').textContent = 'Редактировать контрагента';
+        document.getElementById('contractorId').value = contractor.id;
+        document.getElementById('contractorName').value = contractor.name;
+        document.getElementById('contractorOrganization').value = contractor.organization || '';
+        document.getElementById('contractorExplanation').value = contractor.explanation || '';
+        document.getElementById('addContractorModal').classList.add('active');
+
+        // Фокус на первое поле
+        setTimeout(() => document.getElementById('contractorName').focus(), 100);
+
+        // Enter для сохранения
+        document.getElementById('contractorForm').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                this.saveContractor();
+            }
+        });
+    }
+
+    saveContractor() {
+        const id = document.getElementById('contractorId').value;
+        const name = document.getElementById('contractorName').value.trim();
+        const organization = document.getElementById('contractorOrganization').value.trim();
+        const explanation = document.getElementById('contractorExplanation').value.trim();
+
+        if (!name) {
+            this.showNotification('Введите наименование контрагента', 'error');
+            return;
+        }
+
+        let result;
+        if (id) {
+            result = this.contractorsLibrary.updateContractor(id, { name, organization, explanation });
+        } else {
+            result = this.contractorsLibrary.addContractor({ name, organization, explanation });
+        }
+
+        if (result.success || result.updated) {
+            document.getElementById('addContractorModal').classList.remove('active');
+            this.renderLibraryTable();
+            this.updateSuppliersUI();
+            this.showNotification(result.message, 'success');
+        } else {
+            this.showNotification(result.message, 'error');
+        }
+    }
+
+    async importLibraryFromExcel(file) {
+        this.showLoading();
+        try {
+            const result = await this.contractorsLibrary.importFromExcel(file);
+            if (result.success) {
+                this.renderLibraryTable();
+                this.updateSuppliersUI();
+                // Показываем расширенное уведомление
+                const message = `${result.message}`;
+                this.showNotification(message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            console.error('Ошибка импорта библиотеки:', error);
+            this.showNotification('Ошибка импорта: ' + error.message, 'error');
+        } finally {
+            this.hideLoading();
+        }
     }
 }
 

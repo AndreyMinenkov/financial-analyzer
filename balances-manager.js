@@ -486,6 +486,12 @@ class BalancesManager {
              'Начисленные проценты', 'Реальный остаток', 'Дата']
         ];
 
+        // Переменные для суммирования итогов
+        let totalBalance = 0;
+        let totalDeposit = 0;
+        let totalInterest = 0;
+        let totalRealBalance = 0;
+
         sortedAccountNumbers.forEach(accountNumber => {
             const account = accounts[accountNumber];
             const depositData = this.storage.getDepositForAccount(accountNumber);
@@ -505,25 +511,39 @@ class BalancesManager {
                 accountNumber, balance, depositAmount, interestRate, depositStartDate
             );
 
-            // Форматирование
-            const balanceFormatted = this.storage.formatNumber(balance);
-            const depositFormatted = this.storage.formatNumber(depositAmount);
-            const interestFormatted = this.storage.formatNumber(interest);
-            const realBalanceFormatted = this.storage.formatNumber(realBalance);
-
             data.push([
                 account.company || '',
                 account.bank || '',
                 accountNumber,
-                balanceFormatted,
-                depositFormatted,
-                interestFormatted,
-                realBalanceFormatted,
+                balance,           // Число (не строка)
+                depositAmount,     // Число (не строка)
+                interest,          // Число (не строка)
+                realBalance,       // Число (не строка)
                 statementDate,
                 depositStartDate,
                 calculationDate
             ]);
+
+            // Суммируем для итогов
+            totalBalance += balance;
+            totalDeposit += depositAmount;
+            totalInterest += interest;
+            totalRealBalance += realBalance;
         });
+
+        // Добавляем итоговую строку
+        data.push([
+            'ИТОГО',
+            '',
+            '',
+            totalBalance,
+            totalDeposit,
+            totalInterest,
+            totalRealBalance,
+            '',
+            '',
+            ''
+        ]);
 
         // Создание книги Excel
         const ws = XLSX.utils.aoa_to_sheet(data);
@@ -543,9 +563,33 @@ class BalancesManager {
         ];
         ws['!cols'] = colWidths;
 
+        // Применяем числовой формат к денежным столбцам (D, E, F, G - индексы 3, 4, 5, 6)
+        // Формат #,##0.00 отображает числа как 1 000 000,00
+        const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+        const moneyCols = [3, 4, 5, 6]; // Столбцы D, E, F, G
+
+        for (let col of moneyCols) {
+            for (let row = 1; row <= range.e.r; row++) {
+                const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+                if (!ws[cellAddress]) continue;
+                
+                // Устанавливаем числовой тип и формат
+                ws[cellAddress].t = 'n';
+                ws[cellAddress].z = '#,##0.00';
+            }
+        }
+
+        // Выделяем итоговую строку жирным
+        const lastRow = range.e.r;
+        for (let col = 0; col <= 6; col++) {
+            const cellAddress = XLSX.utils.encode_cell({ r: lastRow, c: col });
+            if (!ws[cellAddress]) continue;
+            ws[cellAddress].s = { font: { bold: true } };
+        }
+
         // Экспорт файла
         const date = new Date().toISOString().slice(0, 10);
-        XLSX.writeFile(wb, `Остатки_${date}.xlsx`);
+        XLSX.writeFile(wb, `Остатки_${date}.xlsx`, { cellStyles: true });
 
         window.app.showNotification(`Экспортировано ${sortedAccountNumbers.length} счетов`, 'success');
     }

@@ -10,8 +10,26 @@ class DebtReconciliationManager {
         this.processedDocuments = [];   // логи обработанных документов
         this.currentDate = new Date();
 
+        // Данные для сводных таблиц
+        this.siUatFile = null;         // файл СИ УАТ
+        this.siUatFileName = '';       // имя файла СИ УАТ
+        this.summaryDT = {             // свод задолженности ДТ
+            legal: 0,
+            notRecoverable: 0,
+            recoverable: 0
+        };
+        this.summarySIUAT = {          // свод задолженности СИ УАТ
+            legal: 0,
+            notRecoverable: 0,
+            recoverable: 0
+        };
+        this.currentSubdivisionData = {}; // данные текущего дня по филиалам
+
         // Загружаем список целевых контрагентов из localStorage или используем стандартный
         this.loadTargetContractors();
+
+        // Загружаем сохранённые сводные данные
+        this.loadSummaryData();
 
         this.stats = {
             totalDocuments: 0,
@@ -57,6 +75,137 @@ class DebtReconciliationManager {
         this.TARGET_CONTRAGENTS = contractors.filter(c => c.trim() !== '');
         localStorage.setItem('targetContractors', JSON.stringify(this.TARGET_CONTRAGENTS));
         console.log('Сохранен список контрагентов:', this.TARGET_CONTRAGENTS);
+    }
+
+    // Загрузка сводных данных из localStorage
+    loadSummaryData() {
+        try {
+            const dtData = localStorage.getItem('summaryDT');
+            if (dtData) {
+                this.summaryDT = JSON.parse(dtData);
+            }
+            const siuatData = localStorage.getItem('summarySIUAT');
+            if (siuatData) {
+                this.summarySIUAT = JSON.parse(siuatData);
+            }
+        } catch (e) {
+            console.error('Ошибка загрузки сводных данных:', e);
+        }
+    }
+
+    // Сохранение сводных данных в localStorage
+    saveSummaryData() {
+        try {
+            localStorage.setItem('summaryDT', JSON.stringify(this.summaryDT));
+            localStorage.setItem('summarySIUAT', JSON.stringify(this.summarySIUAT));
+            console.log('Сводные данные сохранены');
+        } catch (e) {
+            console.error('Ошибка сохранения сводных данных:', e);
+        }
+    }
+
+    // Получить данные предыдущего дня из localStorage (единый ключ для ручных данных)
+    getPreviousDayData() {
+        try {
+            const data = localStorage.getItem('previousDayDebt_manual');
+            return data ? JSON.parse(data) : {};
+        } catch (e) {
+            console.error('Ошибка загрузки данных предыдущего дня:', e);
+            return {};
+        }
+    }
+
+    // Сохранить данные текущего дня в localStorage (для использования завтра — единый ключ)
+    saveCurrentDayData() {
+        try {
+            localStorage.setItem('previousDayDebt_manual', JSON.stringify(this.currentSubdivisionData));
+            console.log('Данные текущего дня сохранены для использования завтра');
+        } catch (e) {
+            console.error('Ошибка сохранения данных текущего дня:', e);
+        }
+    }
+
+    // Собрать данные по филиалам из debtData (только из колонки OVERDUE)
+    collectSubdivisionData() {
+        const subdivisionData = {};
+        let currentFilial = null;
+        let filialCount = 0;
+        let docCount = 0;
+        let totalOverdue = 0;
+
+        console.log('=== collectSubdivisionData START ===');
+        console.log('debtData строк:', this.debtData.length);
+        console.log('processedDocuments (обновлённые через reconcile):', this.processedDocuments.length);
+
+        // Создаём Set обработанных документов для отладки
+        const processedRowSet = new Set(this.processedDocuments.map(d => d.rowIndex));
+
+        for (let i = 0; i < this.debtData.length; i++) {
+            const row = this.debtData[i];
+            if (!row || row.length === 0) continue;
+
+            const cellValue = row[0];
+            if (!cellValue) continue;
+
+            const strVal = String(cellValue).trim();
+
+            // Филиал — строка начинается с "ДТ "
+            if (strVal.startsWith('ДТ ')) {
+                currentFilial = strVal;
+                if (!subdivisionData[currentFilial]) {
+                    subdivisionData[currentFilial] = 0;
+                    filialCount++;
+                }
+            }
+
+            // Документ — добавляем просрочку к текущему филиалу
+            if (this.isDocumentRow(row) && currentFilial) {
+                // ВАЖНО: берем значение из колонки OVERDUE (просрочено)
+                const rawValue = row[this.COLUMNS.OVERDUE];
+                const overdue = this.parseExcelNumber(rawValue || 0);
+                subdivisionData[currentFilial] += overdue;
+                totalOverdue += overdue;
+                docCount++;
+
+                // Логируем первые 5 документов для отладки
+                if (docCount <= 5) {
+                    const source = processedRowSet.has(i) ? 'RECONCILED' : 'ORIGINAL';
+                    console.log(`  Дока #${docCount} [${source}]: ${strVal.substring(0, 40)}... | raw=${rawValue} | overdue=${overdue} | филиал=${currentFilial}`);
+                }
+            }
+        }
+
+        // Округляем до 2 знаков
+        for (const key in subdivisionData) {
+            subdivisionData[key] = Math.round(subdivisionData[key] * 100) / 100;
+        }
+
+        this.currentSubdivisionData = subdivisionData;
+        console.log('collectSubdivisionData: филиалов=' + filialCount + ', документов=' + docCount);
+        console.log('collectSubdivisionData: общая просрочка=' + totalOverdue);
+        console.log('collectSubdivisionData: данные по подразделениям:', JSON.stringify(subdivisionData));
+        console.log('=== collectSubdivisionData END ===');
+        
+        return subdivisionData;
+    }
+
+    // Загрузка файла СИ УАТ
+    async loadSiUatFile(file) {
+        console.log('Загрузка файла СИ УАТ:', file.name);
+        try {
+            this.siUatFile = file;
+            this.siUatFileName = file.name;
+            return {
+                success: true,
+                message: 'Файл СИ УАТ загружен: ' + file.name
+            };
+        } catch (error) {
+            console.error('Ошибка загрузки файла СИ УАТ:', error);
+            return {
+                success: false,
+                message: 'Ошибка загрузки файла СИ УАТ: ' + error.message
+            };
+        }
     }
 
     // Получение списка целевых контрагентов
@@ -105,6 +254,9 @@ class DebtReconciliationManager {
         this.debtFileName = '';
         this.receiptsData = [];
         this.processedDocuments = [];
+        this.siUatFile = null;
+        this.siUatFileName = '';
+        this.currentSubdivisionData = {};
         this.stats = {
             totalDocuments: 0,
             foundDocuments: 0,
@@ -136,6 +288,10 @@ class DebtReconciliationManager {
             this.debtHeaders = this.debtData[0] || [];
             this.debtFile = file;
             this.debtFileName = file.name;
+
+            // Сбрасываем данные предыдущей сессии, чтобы не использовать старые значения
+            this.currentSubdivisionData = {};
+            this.processedDocuments = [];
 
             console.log('Файл загружен, строк:', this.debtData.length);
 
@@ -346,24 +502,24 @@ class DebtReconciliationManager {
             const cellValue = row[0];
             if (!cellValue) continue;
             const strVal = String(cellValue).trim();
-
+            
             // Проверяем, является ли строка филиалом
             if (strVal.startsWith('ДТ ')) {
                 return null;  // дошли до филиала - контрагент не найден
             }
-
+            
             // Проверяем, является ли строка контрагентом
             // Теперь считаем контрагентом любую непустую строку, которая:
             // - не начинается с ДТ
             // - не содержит "Договор"
             // - не содержит слова из списка документов
             // - имеет длину > 2 символов
-            if (strVal.length > 2 &&
-                !strVal.includes('Договор') &&
-                !strVal.includes('Акт') &&
-                !strVal.includes('Реализация') &&
-                !strVal.includes('Корректировка') &&
-                !strVal.includes('Поступление') &&
+            if (strVal.length > 2 && 
+                !strVal.includes('Договор') && 
+                !strVal.includes('Акт') && 
+                !strVal.includes('Реализация') && 
+                !strVal.includes('Корректировка') && 
+                !strVal.includes('Поступление') && 
                 !strVal.startsWith('ДТ ')) {
                 return strVal;
             }
@@ -411,7 +567,7 @@ class DebtReconciliationManager {
 
                 // Находим контрагента для этого документа
                 const kontragent = this.findKontragentForRow(i);
-
+                
                 // Проверяем, является ли контрагент целевым
                 // Если контрагент не найден (например, документ висит прямо на филиале) - считаем его целевым?
                 // По логике, если контрагент не определен, документ обрабатывать не нужно
@@ -445,7 +601,7 @@ class DebtReconciliationManager {
                     hasDate = true;
                     console.log(`  Найден в файле поступлений с датой: ${this.formatDate(expectedDate)}`);
                 } else {
-                    console.log(`  Не найден в файле поступлений - документ будет считаться НЕПРОСРОЧЕННЫМ`);
+                    console.log(`  Не найден в файле поступлений - документ останется без изменений`);
                 }
 
                 this.stats.foundDocuments++;
@@ -454,7 +610,7 @@ class DebtReconciliationManager {
                 console.log(`  Сумма долга: ${debtAmount}`);
 
                 // ОБНОВЛЯЕМ ТОЛЬКО ЕСЛИ ЕСТЬ ДАТА В ФАЙЛЕ ПОСТУПЛЕНИЙ
-                if (debtAmount > 0) {
+                if (debtAmount > 0 && hasDate) {
                     const updated = this.updateDocumentRow(i, debtAmount, expectedDate, today, hasDate);
                     if (updated) {
                         this.stats.updatedDocuments++;
@@ -468,12 +624,17 @@ class DebtReconciliationManager {
                         });
                         console.log(`  Документ добавлен в processedDocuments`);
                     }
+                } else {
+                    console.log(`  Документ пропущен (нет даты в файле поступлений)`);
                 }
             }
         }
 
         console.log('\nСверка завершена. Найдено документов целевых контрагентов:', this.stats.foundDocuments, 'Обновлено:', this.stats.updatedDocuments);
         console.log('processedDocuments содержит', this.processedDocuments.length, 'записей');
+
+        // ВАЖНО: Принудительно пересобираем данные по филиалам из ОБНОВЛЕННОГО debtData
+        this.collectSubdivisionData();
 
         return {
             success: true,
@@ -509,91 +670,67 @@ class DebtReconciliationManager {
             }
         }
 
-        // СЛУЧАЙ 1: Есть дата подписания
-        if (hasDate && expectedDate !== null) {
-            if (expectedDate >= today) {
-                // Дата в будущем или сегодня - НЕ ПРОСРОЧЕНО
-                console.log(`  -> НЕ ПРОСРОЧЕНО (дата в будущем/сегодня: ${this.formatDate(expectedDate)})`);
+        // Если даты нет - документ непросроченный
+        if (!hasDate || expectedDate === null || expectedDate >= today) {
+            console.log(`  -> НЕ ПРОСРОЧЕНО (причина: ${!hasDate ? 'нет даты' : 'дата в будущем'})`);
 
-                // O (просрочено) - очищаем
-                if (row[this.COLUMNS.OVERDUE] !== 0) {
-                    row[this.COLUMNS.OVERDUE] = 0;
-                    changed = true;
-                }
-
-                // R (дни) - очищаем
-                if (row[this.COLUMNS.DAYS] !== 0) {
-                    row[this.COLUMNS.DAYS] = 0;
-                    changed = true;
-                }
-
-                // T (не просрочено) - устанавливаем сумму
-                if (row[this.COLUMNS.NOT_OVERDUE] !== debtAmount) {
-                    row[this.COLUMNS.NOT_OVERDUE] = debtAmount;
-                    changed = true;
-                }
-
-            } else if (expectedDate < today) {
-                // Дата в прошлом - ПРОСРОЧЕНО
-                const daysOverdue = Math.floor((today - expectedDate) / (1000 * 60 * 60 * 24));
-                console.log(`  -> ПРОСРОЧЕНО на ${daysOverdue} дн. (дата: ${this.formatDate(expectedDate)})`);
-
-                // O (просрочено) - сумма долга
-                if (row[this.COLUMNS.OVERDUE] !== debtAmount) {
-                    row[this.COLUMNS.OVERDUE] = debtAmount;
-                    changed = true;
-                }
-
-                // R (дни просрочки)
-                if (row[this.COLUMNS.DAYS] !== daysOverdue) {
-                    row[this.COLUMNS.DAYS] = daysOverdue;
-                    changed = true;
-                }
-
-                // T (не просрочено) - очищаем
-                if (row[this.COLUMNS.NOT_OVERDUE] !== 0) {
-                    row[this.COLUMNS.NOT_OVERDUE] = 0;
-                    changed = true;
-                }
-
-                // Определяем интервал по дням
-                let intervalCol = this.COLUMNS.INTERVAL_1_15; // U по умолчанию
-                if (daysOverdue >= 1 && daysOverdue <= 15) {
-                    intervalCol = this.COLUMNS.INTERVAL_1_15;      // U
-                } else if (daysOverdue >= 16 && daysOverdue <= 29) {
-                    intervalCol = this.COLUMNS.INTERVAL_16_29;     // V
-                } else if (daysOverdue >= 30 && daysOverdue <= 89) {
-                    intervalCol = this.COLUMNS.INTERVAL_30_89;     // W
-                } else if (daysOverdue >= 90 && daysOverdue <= 179) {
-                    intervalCol = this.COLUMNS.INTERVAL_90_179;    // X
-                } else if (daysOverdue >= 180) {
-                    intervalCol = this.COLUMNS.INTERVAL_180_PLUS;  // Y
-                }
-
-                if (row[intervalCol] !== debtAmount) {
-                    row[intervalCol] = debtAmount;
-                    changed = true;
-                }
-            }
-        } else {
-            // СЛУЧАЙ 2 и 3: Нет даты подписания
-            console.log(`  -> НЕТ ДАТЫ ПОДПИСАНИЯ - документ считается НЕПРОСРОЧЕННЫМ`);
-
-            // O (просрочено) - очищаем, если там была сумма
+            // O (просрочено) - очищаем
             if (row[this.COLUMNS.OVERDUE] !== 0) {
                 row[this.COLUMNS.OVERDUE] = 0;
                 changed = true;
             }
 
-            // R (дни) - очищаем, если там были дни
+            // R (дни) - очищаем
             if (row[this.COLUMNS.DAYS] !== 0) {
                 row[this.COLUMNS.DAYS] = 0;
                 changed = true;
             }
 
-            // T (не просрочено) - устанавливаем сумму (даже если документ был просрочен в исходнике)
+            // T (не просрочено) - устанавливаем сумму
             if (row[this.COLUMNS.NOT_OVERDUE] !== debtAmount) {
                 row[this.COLUMNS.NOT_OVERDUE] = debtAmount;
+                changed = true;
+            }
+
+        } else if (expectedDate < today) {
+            // ПРОСРОЧЕНО
+            const daysOverdue = Math.floor((today - expectedDate) / (1000 * 60 * 60 * 24));
+            console.log(`  -> ПРОСРОЧЕНО на ${daysOverdue} дн.`);
+
+            // O (просрочено) - сумма долга
+            if (row[this.COLUMNS.OVERDUE] !== debtAmount) {
+                row[this.COLUMNS.OVERDUE] = debtAmount;
+                changed = true;
+            }
+
+            // R (дни просрочки)
+            if (row[this.COLUMNS.DAYS] !== daysOverdue) {
+                row[this.COLUMNS.DAYS] = daysOverdue;
+                changed = true;
+            }
+
+            // T (не просрочено) - очищаем
+            if (row[this.COLUMNS.NOT_OVERDUE] !== 0) {
+                row[this.COLUMNS.NOT_OVERDUE] = 0;
+                changed = true;
+            }
+
+            // Определяем интервал по дням
+            let intervalCol = this.COLUMNS.INTERVAL_1_15; // U по умолчанию
+            if (daysOverdue >= 1 && daysOverdue <= 15) {
+                intervalCol = this.COLUMNS.INTERVAL_1_15;      // U
+            } else if (daysOverdue >= 16 && daysOverdue <= 29) {
+                intervalCol = this.COLUMNS.INTERVAL_16_29;     // V
+            } else if (daysOverdue >= 30 && daysOverdue <= 89) {
+                intervalCol = this.COLUMNS.INTERVAL_30_89;     // W
+            } else if (daysOverdue >= 90 && daysOverdue <= 179) {
+                intervalCol = this.COLUMNS.INTERVAL_90_179;    // X
+            } else if (daysOverdue >= 180) {
+                intervalCol = this.COLUMNS.INTERVAL_180_PLUS;  // Y
+            }
+
+            if (row[intervalCol] !== debtAmount) {
+                row[intervalCol] = debtAmount;
                 changed = true;
             }
         }
@@ -610,20 +747,77 @@ class DebtReconciliationManager {
             return { success: false, message: 'Нет данных для экспорта' };
         }
 
-        if (this.processedDocuments.length === 0) {
-            console.log('Нет обновленных документов');
-            return { success: false, message: 'Нет обновленных документов для целевых контрагентов' };
+        // ВАЖНО: Принудительно пересобираем данные по филиалам из ТЕКУЩЕГО debtData
+        // Это гарантирует, что currentSubdivisionData будет содержать актуальные данные из файла
+        console.log('ПРИНУДИТЕЛЬНЫЙ ПЕРЕСБОР данных по филиалам из debtData...');
+        this.collectSubdivisionData();
+
+        // Проверяем, что данные собраны
+        if (Object.keys(this.currentSubdivisionData).length === 0) {
+            console.error('ОШИБКА: Не удалось собрать данные по подразделениям. Убедитесь, что файл содержит филиалы (ДТ ...) и документы.');
+            return { success: false, message: 'Нет данных по подразделениям. Проверьте структуру файла.' };
         }
+
+        console.log('=== ДАННЫЕ ДЛЯ ОТПРАВКИ НА СЕРВЕР ===');
+        console.log('currentDayData (из debtData, колонка O):', JSON.stringify(this.currentSubdivisionData));
+
+        // Получаем данные предыдущего дня из localStorage
+        const previousDayData = this.getPreviousDayData();
+        console.log('previousDayData (из localStorage):', JSON.stringify(previousDayData));
+
+        // Рассчитываем общие суммы для сводки ДТ
+        let totalDebt = 0;
+        let totalOverdue = 0;
+        for (let i = 0; i < this.debtData.length; i++) {
+            const row = this.debtData[i];
+            if (!row) continue;
+            if (this.isDocumentRow(row)) {
+                totalDebt += this.parseExcelNumber(row[this.COLUMNS.DEBT_AMOUNT] || 0);
+                totalOverdue += this.parseExcelNumber(row[this.COLUMNS.OVERDUE] || 0);
+            }
+        }
+        totalDebt = Math.round(totalDebt * 100) / 100;
+        totalOverdue = Math.round(totalOverdue * 100) / 100;
 
         try {
             const formData = new FormData();
             formData.append('file', this.debtFile);
-            formData.append('data', JSON.stringify({
-                updatedDocuments: this.processedDocuments
-            }));
+
+            // Формируем объект данных для сводных таблиц
+            const summaryData = {
+                updatedDocuments: this.processedDocuments,
+                // Данные для таблицы динамики
+                previousDayData: previousDayData,
+                currentDayData: this.currentSubdivisionData,  // ВАЖНО: это данные из debtData, а не из localStorage
+                currentDate: this.formatDate(this.currentDate),
+                previousDate: 'предыдущий рабочий день',
+                // Свод задолженности ДТ
+                summaryDT: {
+                    totalDebt: totalDebt,
+                    totalOverdue: totalOverdue,
+                    legal: this.summaryDT.legal,
+                    notRecoverable: this.summaryDT.notRecoverable,
+                    recoverable: this.summaryDT.recoverable
+                },
+                // Свод задолженности СИ УАТ
+                summarySIUAT: {
+                    legal: this.summarySIUAT.legal,
+                    notRecoverable: this.summarySIUAT.notRecoverable,
+                    recoverable: this.summarySIUAT.recoverable
+                },
+                // Метаданные файла СИ УАТ
+                siUatFileName: this.siUatFileName || ''
+            };
+
+            // Если файл СИ УАТ загружен — добавляем его
+            if (this.siUatFile) {
+                formData.append('siUatFile', this.siUatFile);
+            }
+
+            formData.append('data', JSON.stringify(summaryData));
 
             console.log('Отправляем на сервер...');
-            console.log('Размер processedDocuments:', JSON.stringify(this.processedDocuments).length, 'байт');
+            console.log('Размер данных:', JSON.stringify(summaryData).length, 'байт');
 
             // Увеличиваем таймаут и добавляем обработку ошибок
             const controller = new AbortController();
@@ -659,6 +853,11 @@ class DebtReconciliationManager {
             window.URL.revokeObjectURL(url);
 
             console.log('Файл успешно сохранен');
+            console.log('=== ИТОГОВЫЕ ДАННЫЕ ДЛЯ ТАБЛИЦЫ ДИНАМИКИ ===');
+            console.log('СТОЛБЕЦ 2 (текущий день, из debtData):', JSON.stringify(this.currentSubdivisionData));
+            console.log('СТОЛБЕЦ 3 (предыдущий день, из localStorage):', JSON.stringify(this.getPreviousDayData()));
+            console.log('Данные НЕ сохранены в localStorage автоматически.');
+            console.log('Для сохранения текущих данных в localStorage используйте "Настройки сводных" → "Сохранить".');
 
             return {
                 success: true,
@@ -667,160 +866,19 @@ class DebtReconciliationManager {
 
         } catch (error) {
             console.error('Ошибка при отправке на сервер:', error);
-
+            
             if (error.name === 'AbortError') {
                 return {
                     success: false,
                     message: 'Превышено время ожидания ответа от сервера. Попробуйте уменьшить количество документов.'
                 };
             }
-
+            
             return {
                 success: false,
                 message: 'Ошибка при сохранении: ' + error.message
             };
         }
-    }
-
-    async exportOverdueToExcel() {
-        console.log('=== ВЫГРУЗКА ПРОСРОЧЕННЫХ АКТОВ В EXCEL ===');
-
-        if (!this.debtData || this.debtData.length === 0) {
-            return { success: false, message: 'Нет данных для выгрузки' };
-        }
-
-        // Собираем просроченные акты только по целевым контрагентам
-        const overdueActs = [];
-
-        for (let i = 0; i < this.debtData.length; i++) {
-            const row = this.debtData[i];
-            if (!row || row.length === 0) continue;
-
-            // Проверяем, что это документ (акт)
-            if (this.isDocumentRow(row)) {
-                const docName = String(row[this.COLUMNS.DOCUMENT_NAME] || '').trim();
-                const kontragent = this.findKontragentForRow(i);
-
-                // Проверяем, что контрагент целевой
-                if (!kontragent) continue;
-
-                const isTargetKontragent = this.TARGET_CONTRAGENTS.some(target =>
-                    kontragent.includes(target)
-                );
-
-                if (!isTargetKontragent) continue;
-
-                // Получаем сумму просрочки из колонки O
-                const overdueAmount = row[this.COLUMNS.OVERDUE] || 0;
-
-                // Если есть просроченная сумма
-                if (overdueAmount > 0) {
-                    const days = row[this.COLUMNS.DAYS] || 0;
-
-                    // Находим договор (поднимаемся вверх по строкам)
-                    let dogovor = '';
-                    for (let j = i - 1; j >= 0; j--) {
-                        const prevRow = this.debtData[j];
-                        if (!prevRow) continue;
-                        const prevVal = prevRow[0];
-                        if (prevVal && String(prevVal).includes('Договор')) {
-                            dogovor = String(prevVal).trim();
-                            break;
-                        }
-                    }
-
-                    // Находим дату подписания из processedDocuments
-                    const processedDoc = this.processedDocuments.find(d => d.rowIndex === i);
-                    const paymentDate = processedDoc ? processedDoc.date : '';
-
-                    overdueActs.push({
-                        dogovor: dogovor,
-                        documentName: docName,
-                        amount: overdueAmount,
-                        paymentDate: paymentDate,
-                        days: days
-                    });
-                }
-            }
-        }
-
-        if (overdueActs.length === 0) {
-            return { success: false, message: 'Нет просроченных актов для выгрузки' };
-        }
-
-        // Сортируем по количеству дней просрочки (от большего к меньшему)
-        overdueActs.sort((a, b) => b.days - a.days);
-
-        // Формируем Excel-файл
-        const totalSum = overdueActs.reduce((sum, item) => sum + item.amount, 0);
-
-        // Подготовка данных для Excel
-        const data = [
-            ['Договор', 'Акт (документ)', 'Сумма просрочки, руб', 'Дата оплаты (по подписанию)', 'Количество просроченных дней']
-        ];
-
-        overdueActs.forEach(item => {
-            data.push([
-                item.dogovor,
-                item.documentName,
-                item.amount,
-                item.paymentDate,
-                item.days
-            ]);
-        });
-
-        // Добавляем итоговую строку
-        data.push([
-            'ИТОГО:',
-            '',
-            totalSum,
-            '',
-            ''
-        ]);
-
-        // Создание рабочей книги
-        const ws = XLSX.utils.aoa_to_sheet(data);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Просроченные акты');
-
-        // Устанавливаем числовой формат для столбца с суммой
-        const range = XLSX.utils.decode_range(ws['!ref']);
-        for (let row = range.s.r + 1; row <= range.e.r; row++) {
-            const cellAddress = XLSX.utils.encode_cell({ r: row, c: 2 }); // Столбец C (индекс 2)
-            if (ws[cellAddress]) {
-                ws[cellAddress].t = 'n';
-                ws[cellAddress].z = '#,##0.00';
-            }
-        }
-
-        // Автонастройка ширины столбцов
-        const colWidths = [
-            { wch: 40 }, // Договор
-            { wch: 40 }, // Акт
-            { wch: 20 }, // Сумма
-            { wch: 15 }, // Дата оплаты
-            { wch: 12 }  // Дни
-        ];
-        ws['!cols'] = colWidths;
-
-        // Сохранение файла
-        const fileName = `Просроченные_акты_${this.formatDate(this.currentDate)}.xlsx`;
-        XLSX.writeFile(wb, fileName);
-
-        console.log(`Выгружено ${overdueActs.length} просроченных актов в Excel`);
-
-        return {
-            success: true,
-            message: `Выгружено ${overdueActs.length} просроченных актов в Excel`
-        };
-    }
-
-    formatNumber(num) {
-        if (!num) return '0.00';
-        return new Intl.NumberFormat('ru-RU', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        }).format(num);
     }
 
     getStats() {
