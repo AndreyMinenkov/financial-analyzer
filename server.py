@@ -3,6 +3,7 @@ from flask_cors import CORS
 import openpyxl
 import openpyxl.utils
 from openpyxl.styles import numbers, Alignment, Font, PatternFill, Border, Side
+from openpyxl.worksheet.views import Pane
 from copy import copy
 import io
 from datetime import datetime
@@ -192,12 +193,19 @@ def clear_all_intervals(ws, row):
     for col in interval_cols:
         safe_set_number_format(ws, row, col, 0)
 
+# Расширенный список типов документов
+DOCUMENT_KEYWORDS = [
+    'Акт', 'Реализация', 'Корректировка', 'Поступление',
+    'Взаимозачет', 'Взаимозачёт', 'Списание', 'УПД', 'Счет-фактура',
+    'Товарная накладная', 'ТОРГ-12', 'Универсальный передаточный'
+]
+
 def find_structure(ws):
     """Находит все строки филиалов, контрагентов, договоров и документов"""
     filials = []      # строки с "ДТ "
     kontragents = []  # любые строки, которые являются контрагентами
     dogovors = []     # строки с "Договор"
-    documents = []    # строки с актами/реализациями
+    documents = []    # строки с документами
     total_row = None  # строка с "Итого"
 
     for row in range(14, ws.max_row + 1):
@@ -219,8 +227,8 @@ def find_structure(ws):
         elif str_val.startswith('Договор') or 'договор' in str_val.lower():
             dogovors.append(row)
 
-        # 4. Документы
-        elif any(x in str_val for x in ['Акт', 'Реализация', 'Корректировка', 'Поступление']):
+        # 4. Документы - расширенная проверка
+        elif any(keyword in str_val for keyword in DOCUMENT_KEYWORDS):
             documents.append(row)
 
         # 5. Контрагенты (все остальное, что не попало в другие категории)
@@ -240,32 +248,52 @@ def recalc_totals(ws):
     print(f"Найдено: филиалов={len(filials)}, контрагентов={len(kontragents)}, "
           f"договоров={len(dogovors)}, документов={len(documents)}")
 
+    # ВАЖНО: Исключаем строки контрагентов и филиалов из суммирования документов
+    # Суммируем только строки, которые НЕ являются контрагентами/филиалами/договорами
+    document_rows_only = [r for r in documents if r not in kontragents and r not in filials and r not in dogovors]
+    
+    print(f"Чистых документов (без дублей): {len(document_rows_only)}")
+
     # Функция для суммирования значений ТОЛЬКО для указанных строк
-    def sum_rows(rows, col):
+    # ВАЖНО: Исключаем строки, которые уже являются итогами (контрагенты, филиалы, договоры)
+    def sum_rows(rows, col, exclude_rows=None):
+        if exclude_rows is None:
+            exclude_rows = set()
         total = 0
         for r in rows:
+            if r in exclude_rows:
+                continue  # Пропускаем строки-итоги
             val = get_cell_value(ws, r, col)
             if isinstance(val, (int, float)):
                 total += val
         return total
 
     # Функция для нахождения максимального значения дней среди указанных строк
-    def max_days_in_rows(rows):
+    def max_days_in_rows(rows, exclude_rows=None):
+        if exclude_rows is None:
+            exclude_rows = set()
         max_val = 0
         for r in rows:
+            if r in exclude_rows:
+                continue
             val = get_cell_value(ws, r, COLUMNS['DAYS'])
             if isinstance(val, (int, float)) and val > max_val:
                 max_val = val
         return max_val
 
-    # 1. Пересчитываем договоры (суммируем ТОЛЬКО документы под ними)
+    # Создаём множества для быстрого поиска
+    kontragent_set = set(kontragents)
+    filial_set = set(filials)
+    dogovor_set = set(dogovors)
+
+    # 1. Пересчитываем договоры (суммируем ТОЛЬКО чистые документы под ними)
     for i, dog_row in enumerate(dogovors):
         # Находим документы, принадлежащие этому договору
         doc_rows = []
         for r in range(dog_row + 1, ws.max_row + 1):
-            if r in dogovors or r in kontragents or r in filials or r == total_row:
+            if r in dogovor_set or r in kontragent_set or r in filial_set or r == total_row:
                 break
-            if r in documents:
+            if r in document_rows_only:  # Используем только чистые документы
                 doc_rows.append(r)
 
         if doc_rows:
@@ -281,44 +309,64 @@ def recalc_totals(ws):
             safe_set_value(ws, dog_row, COLUMNS['DAYS'], max_day)
 
     # 2. Пересчитываем контрагентов (суммируем ТОЛЬКО договоры под ними)
+    # ВАЖНО: НЕ суммируем документы напрямую, только через договоры
     for i, kontr_row in enumerate(kontragents):
         # Находим договоры, принадлежащие этому контрагенту
         dog_rows = []
         for r in range(kontr_row + 1, ws.max_row + 1):
-            if r in kontragents or r in filials or r == total_row:
+            if r in kontragent_set or r in filial_set or r == total_row:
                 break
-            if r in dogovors:
+            if r in dogovor_set:
                 dog_rows.append(r)
 
+        # Если есть договоры - суммируем их
         if dog_rows:
             print(f"Контрагент стр.{kontr_row}: договоры {dog_rows}")
 
             # Пересчитываем ВСЕХ контрагентов (и целевых, и нецелевых)
             for col in SUM_COLUMNS:
-                total = sum_rows(dog_rows, col)
+                total = sum_rows(dog_rows, col, exclude_rows=kontragent_set | filial_set)
                 safe_set_number_format(ws, kontr_row, col, total)
 
-            max_day = max_days_in_rows(dog_rows)
+            max_day = max_days_in_rows(dog_rows, exclude_rows=kontragent_set | filial_set)
             safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
+        else:
+            # Если нет договоров, ищем документы напрямую под контрагентом
+            doc_rows = []
+            for r in range(kontr_row + 1, ws.max_row + 1):
+                if r in kontragent_set or r in filial_set or r == total_row:
+                    break
+                if r in document_rows_only:
+                    doc_rows.append(r)
+            
+            if doc_rows:
+                print(f"Контрагент стр.{kontr_row}: документы (без договоров) {doc_rows}")
+                
+                for col in SUM_COLUMNS:
+                    total = sum_rows(doc_rows, col)
+                    safe_set_number_format(ws, kontr_row, col, total)
+
+                max_day = max_days_in_rows(doc_rows)
+                safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
 
     # 3. Пересчитываем филиалы (суммируем ТОЛЬКО контрагентов под ними)
     for i, fil_row in enumerate(filials):
-        # Находим контрагентов, принадлежащих этому филиалу
+        # Находим контрагентов, принадлежащие этому филиалу
         kontr_rows = []
         for r in range(fil_row + 1, ws.max_row + 1):
-            if r in filials or r == total_row:
+            if r in filial_set or r == total_row:
                 break
-            if r in kontragents:
+            if r in kontragent_set:
                 kontr_rows.append(r)
 
         if kontr_rows:
             print(f"Филиал стр.{fil_row}: контрагенты {kontr_rows}")
 
             for col in SUM_COLUMNS:
-                total = sum_rows(kontr_rows, col)
+                total = sum_rows(kontr_rows, col, exclude_rows=filial_set)
                 safe_set_number_format(ws, fil_row, col, total)
 
-            max_day = max_days_in_rows(kontr_rows)
+            max_day = max_days_in_rows(kontr_rows, exclude_rows=filial_set)
             safe_set_value(ws, fil_row, COLUMNS['DAYS'], max_day)
 
     # 4. Пересчитываем общий итог (суммируем ТОЛЬКО филиалы)
@@ -456,7 +504,6 @@ def copy_worksheet_full(ws, wb):
     
     # 7. Копируем freeze panes
     if ws.sheet_view and ws.sheet_view.pane:
-        from openpyxl.worksheet.views import Pane
         pane = ws.sheet_view.pane
         new_ws.sheet_view.pane = Pane(
             active_pane=pane.activePane,
@@ -762,9 +809,11 @@ def create_summary_sheet(ws, data):
         cell_value.alignment = Alignment(horizontal='right')
         if 'ПДЗ' in label:
             cell_value.font = Font(bold=True, color='FF0000')
+        else:
+            cell_value.font = Font(bold=True)
         row += 1
 
-    row += 3
+    row += 2
 
     # ===== ТАБЛИЦА 3: Свод задолженности СИ УАТ =====
     ws.cell(row=row, column=1, value='Свод задолженности СИ УАТ').font = title_font
@@ -786,156 +835,11 @@ def create_summary_sheet(ws, data):
         cell_value.number_format = number_format
         cell_value.border = thin_border
         cell_value.alignment = Alignment(horizontal='right')
+        cell_value.font = Font(bold=True)
         row += 1
-
-    # Ширина колонок
-    ws.column_dimensions['A'].width = 40
-    ws.column_dimensions['B'].width = 20
-    ws.column_dimensions['C'].width = 20
-    ws.column_dimensions['D'].width = 18
 
     print("Лист 'Сводные таблицы' создан")
 
-def append_pivot_table(ws, pivot_data, pivot_headers):
-    """Добавляет сводную таблицу на существующий лист через 5 строк после данных"""
-
-    # Находим последнюю строку с данными
-    last_row = ws.max_row
-
-    # Стартовая строка для сводной (5 пустых строк + 1 для заголовка)
-    title_row = last_row + 6  # +1 переход + 5 пустых
-    header_row = last_row + 7
-    data_start_row = last_row + 8
-
-    # Стили
-    title_font = Font(bold=True, size=14)
-    title_alignment = Alignment(horizontal='center')
-
-    header_fill = PatternFill(start_color='FF8C00', end_color='FF8C00', fill_type='solid')
-    header_font = Font(bold=True, size=11, color='FFFFFF')
-    header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-
-    total_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
-    total_font = Font(bold=True, size=11)
-    total_alignment = Alignment(horizontal='right')
-
-    explanation_fill = PatternFill(start_color='FFF2CC', end_color='FFF2CC', fill_type='solid')
-
-    thin_border = Border(
-        left=Side(style='thin'),
-        right=Side(style='thin'),
-        top=Side(style='thin'),
-        bottom=Side(style='thin')
-    )
-
-    number_format = '#,##0.00'
-
-    # Заголовок сводной таблицы
-    title_cell = ws.cell(row=title_row, column=1, value='Сводная таблица оплат по подразделениям')
-    title_cell.font = title_font
-    title_cell.alignment = title_alignment
-
-    # Объединение для заголовка
-    last_col = len(pivot_headers) + 3  # Контрагент + подразделения + Итого + Пояснение
-    ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=last_col)
-
-    # Заголовки таблицы
-    headers = ['Контрагент'] + pivot_headers + ['Итого', 'Пояснение']
-    for col_idx, header in enumerate(headers, 1):
-        cell = ws.cell(row=header_row, column=col_idx, value=header)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = header_alignment
-        cell.border = thin_border
-
-    # Записываем данные
-    col_totals = {h: 0 for h in pivot_headers}
-    grand_total = 0
-
-    for row_idx, row_data in enumerate(pivot_data):
-        current_row = data_start_row + row_idx
-
-        # Контрагент
-        ws.cell(row=current_row, column=1, value=row_data['contractor']).border = thin_border
-
-        # Подразделения
-        for col_idx, h in enumerate(pivot_headers, 2):
-            value = row_data.get(h, 0)
-            # Если 0 — ставим "-", иначе число
-            if value == 0:
-                cell = ws.cell(row=current_row, column=col_idx, value='-')
-            else:
-                cell = ws.cell(row=current_row, column=col_idx, value=value)
-                cell.number_format = number_format
-            cell.border = thin_border
-            cell.alignment = Alignment(horizontal='right')
-            col_totals[h] = col_totals.get(h, 0) + value
-
-        # Итого по строке
-        row_total = row_data.get('total', 0)
-        if row_total == 0:
-            total_cell = ws.cell(row=current_row, column=len(pivot_headers) + 2, value='-')
-        else:
-            total_cell = ws.cell(row=current_row, column=len(pivot_headers) + 2, value=row_total)
-            total_cell.number_format = number_format
-        total_cell.border = thin_border
-        total_cell.alignment = Alignment(horizontal='right')
-        total_cell.font = Font(bold=True)
-        grand_total += row_total
-
-        # Пояснение
-        explanation = row_data.get('explanation', '')
-        expl_cell = ws.cell(row=current_row, column=len(pivot_headers) + 3, value=explanation)
-        expl_cell.border = thin_border
-
-        # Жёлтый фон для строк с пояснениями
-        if explanation:
-            for col_idx in range(1, last_col + 1):
-                cell = ws.cell(row=current_row, column=col_idx)
-                cell.fill = explanation_fill
-
-    # Итоговая строка
-    total_row = data_start_row + len(pivot_data)
-
-    ws.cell(row=total_row, column=1, value='ИТОГО').font = total_font
-    ws.cell(row=total_row, column=1).fill = total_fill
-    ws.cell(row=total_row, column=1).alignment = total_alignment
-    ws.cell(row=total_row, column=1).border = thin_border
-
-    for col_idx, h in enumerate(pivot_headers, 2):
-        col_total = col_totals[h]
-        if col_total == 0:
-            cell = ws.cell(row=total_row, column=col_idx, value='-')
-        else:
-            cell = ws.cell(row=total_row, column=col_idx, value=col_total)
-            cell.number_format = number_format
-        cell.font = total_font
-        cell.fill = total_fill
-        cell.alignment = total_alignment
-        cell.border = thin_border
-
-    grand_total_cell = ws.cell(row=total_row, column=len(pivot_headers) + 2, value=grand_total if grand_total > 0 else '-')
-    if grand_total > 0:
-        grand_total_cell.number_format = number_format
-    grand_total_cell.font = total_font
-    grand_total_cell.fill = total_fill
-    grand_total_cell.alignment = total_alignment
-    grand_total_cell.border = thin_border
-
-    ws.cell(row=total_row, column=len(pivot_headers) + 3, value='').fill = total_fill
-    ws.cell(row=total_row, column=len(pivot_headers) + 3).border = thin_border
-
-    # Ширина колонок
-    ws.column_dimensions['A'].width = 35
-    for i in range(2, len(pivot_headers) + 2):
-        col_letter = openpyxl.utils.get_column_letter(i)
-        ws.column_dimensions[col_letter].width = 18
-
-    last_col_letter = openpyxl.utils.get_column_letter(len(pivot_headers) + 2)
-    ws.column_dimensions[last_col_letter].width = 18
-
-    expl_col_letter = openpyxl.utils.get_column_letter(len(pivot_headers) + 3)
-    ws.column_dimensions[expl_col_letter].width = 50
-
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    print("Сервер запущен. Для остановки нажми Ctrl+C\n")
+    app.run(debug=True, port=5000, host='0.0.0.0')

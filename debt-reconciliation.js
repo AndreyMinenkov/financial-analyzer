@@ -140,6 +140,9 @@ class DebtReconciliationManager {
         // Создаём Set обработанных документов для отладки
         const processedRowSet = new Set(this.processedDocuments.map(d => d.rowIndex));
 
+        // Отслеживаем уже обработанные строки чтобы избежать дублирования
+        const processedRows = new Set();
+
         for (let i = 0; i < this.debtData.length; i++) {
             const row = this.debtData[i];
             if (!row || row.length === 0) continue;
@@ -159,13 +162,30 @@ class DebtReconciliationManager {
             }
 
             // Документ — добавляем просрочку к текущему филиалу
-            if (this.isDocumentRow(row) && currentFilial) {
+            // ВАЖНО: Пропускаем строки контрагентов, договоров и итого
+            if (this.isDocumentRow(row) && currentFilial && !processedRows.has(i)) {
+                // Проверяем, что это не строка контрагента или договора
+                const isKontragentOrDogovor = strVal.includes('Договор') || 
+                                              strVal.includes('договор') ||
+                                              (!strVal.includes('Акт') && !strVal.includes('Реализация') && 
+                                               !strVal.includes('Корректировка') && !strVal.includes('Поступление') &&
+                                               !strVal.includes('Взаимозачет') && !strVal.includes('Взаимозачёт') &&
+                                               !strVal.includes('Списание') && !strVal.includes('УПД'));
+                
+                // Пропускаем если это не документ
+                if (isKontragentOrDogovor) {
+                    continue;
+                }
+                
                 // ВАЖНО: берем значение из колонки OVERDUE (просрочено)
                 const rawValue = row[this.COLUMNS.OVERDUE];
                 const overdue = this.parseExcelNumber(rawValue || 0);
+                
+                // Добавляем только если строка ещё не была обработана
                 subdivisionData[currentFilial] += overdue;
                 totalOverdue += overdue;
                 docCount++;
+                processedRows.add(i);  // Помечаем как обработанную
 
                 // Логируем первые 5 документов для отладки
                 if (docCount <= 5) {
@@ -185,7 +205,7 @@ class DebtReconciliationManager {
         console.log('collectSubdivisionData: общая просрочка=' + totalOverdue);
         console.log('collectSubdivisionData: данные по подразделениям:', JSON.stringify(subdivisionData));
         console.log('=== collectSubdivisionData END ===');
-        
+
         return subdivisionData;
     }
 
@@ -488,10 +508,15 @@ class DebtReconciliationManager {
         if (!value) return false;
 
         const str = String(value);
-        return str.indexOf('Акт') !== -1 ||
-               str.indexOf('Реализация') !== -1 ||
-               str.indexOf('Корректировка') !== -1 ||
-               str.indexOf('Поступление') !== -1;
+        
+        // Расширенный список типов документов
+        const documentKeywords = [
+            'Акт', 'Реализация', 'Корректировка', 'Поступление',
+            'Взаимозачет', 'Взаимозачёт', 'Списание', 'УПД', 'Счет-фактура',
+            'Товарная накладная', 'ТОРГ-12', 'Универсальный передаточный'
+        ];
+        
+        return documentKeywords.some(keyword => str.includes(keyword));
     }
 
     // Находит контрагента для строки документа (расширенная версия)
