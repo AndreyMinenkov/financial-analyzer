@@ -720,11 +720,12 @@ def save_excel():
                 siuat_ws = siuat_wb.active
 
                 # Полное копирование с сохранением всего форматирования
-                copy_worksheet_full(siuat_ws, wb)
+                # (функция возвращает созданный лист)
+                new_siuat_ws = copy_worksheet_full(siuat_ws, wb)
 
                 # Переименовываем скопированный лист
-                new_siuat_ws = wb[wb.sheetnames[-1]]
                 new_siuat_ws.title = 'Свод ДЗ СИ УАТ'
+                print(f"Лист переименован в 'Свод ДЗ СИ УАТ', все листы: {wb.sheetnames}")
 
                 # Извлекаем общую ДЗ и ПДЗ из СИ УАТ
                 siuat_totals = extract_siuat_totals(new_siuat_ws)
@@ -899,12 +900,16 @@ def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_de
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
     row += 2
 
-    # Используем данные из итогового файла (не client-side расчёт)
-    print(f"Свод ДТ: общая ДЗ={total_debt}, ПДЗ={total_overdue}")
+    # Данные: общая ДЗ и ПДЗ — из итогового файла; судебная/взыскание — из настроек
+    summary_dt = data.get('summaryDT', {})
+    print(f"Свод ДТ: общая ДЗ={total_debt}, ПДЗ={total_overdue}, судебная={summary_dt.get('legal', 0)}")
 
     summary_dt_data = [
         ('общая ДЗ', total_debt),
         ('из них ПДЗ', total_overdue),
+        ('в т.ч. Судебная', summary_dt.get('legal', 0)),
+        ('не подлежащая к взысканию', summary_dt.get('notRecoverable', 0)),
+        ('подлежащая к взысканию', summary_dt.get('recoverable', 0)),
     ]
 
     for label, value in summary_dt_data:
@@ -912,6 +917,8 @@ def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_de
         cell_label.border = thin_border
         if 'ПДЗ' in label:
             cell_label.font = Font(bold=True, color='FF0000')
+        elif 'Судебная' in label:
+            cell_label.font = Font(bold=True, color='0000FF')
         else:
             cell_label.font = Font(bold=True)
 
@@ -921,6 +928,8 @@ def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_de
         cell_value.alignment = Alignment(horizontal='right')
         if 'ПДЗ' in label:
             cell_value.font = Font(bold=True, color='FF0000')
+        elif 'Судебная' in label:
+            cell_value.font = Font(bold=True, color='0000FF')
         else:
             cell_value.font = Font(bold=True)
         row += 1
@@ -1167,21 +1176,41 @@ def extract_total_row_debt(ws, total_row):
 def extract_siuat_totals(ws):
     """Извлекает общую ДЗ (колонка L) и ПДЗ (колонка O) из итоговой строки СИ УАТ
 
-    Ищет строку 'Итого' и берёт значения из колонок L и O.
+    Ищет строку 'Итого' по всей первой колонке и берёт значения из колонок L и O.
+    Если не найдена по тексту 'Итого', ищет последнюю непустую строку с данными.
     """
     result = {'totalDebt': 0, 'totalOverdue': 0}
+    итоговая_row = None
+
+    # Ищем строку с "Итого"
     for row in range(1, ws.max_row + 1):
         cell_value = get_cell_value(ws, row, 1)
         if not cell_value:
             continue
         str_val = str(cell_value).strip()
         if 'Итого' in str_val or 'ИТОГО' in str_val:
-            total_debt = get_cell_value(ws, row, COLUMNS['DEBT_AMOUNT'])
-            total_overdue = get_cell_value(ws, row, COLUMNS['OVERDUE'])
-            result['totalDebt'] = round(total_debt, 2) if isinstance(total_debt, (int, float)) else 0
-            result['totalOverdue'] = round(total_overdue, 2) if isinstance(total_overdue, (int, float)) else 0
-            print(f"  Найдена итоговая строка СИ УАТ: строка {row}")
+            итоговая_row = row
             break
+
+    if not итоговая_row:
+        # Fallback: ищем последнюю строку с данными в колонке L (общая ДЗ)
+        for row in range(ws.max_row, 1, -1):
+            val_l = get_cell_value(ws, row, COLUMNS['DEBT_AMOUNT'])
+            if val_l and isinstance(val_l, (int, float)) and val_l > 0:
+                итоговая_row = row
+                print(f"  'Итого' не найдена, используем последнюю строку с данными: {row}")
+                break
+
+    if итоговая_row:
+        print(f"  Используем строку {итоговая_row} для извлечения сумм СИ УАТ")
+        total_debt = get_cell_value(ws, итоговая_row, COLUMNS['DEBT_AMOUNT'])
+        total_overdue = get_cell_value(ws, итоговая_row, COLUMNS['OVERDUE'])
+        result['totalDebt'] = round(total_debt, 2) if isinstance(total_debt, (int, float)) else 0
+        result['totalOverdue'] = round(total_overdue, 2) if isinstance(total_overdue, (int, float)) else 0
+        print(f"  СИ УАТ totals из строки {итоговая_row}: totalDebt={result['totalDebt']}, totalOverdue={result['totalOverdue']}")
+    else:
+        print("  !!! Не найдена итоговая строка СИ УАТ")
+
     return result
 
 
