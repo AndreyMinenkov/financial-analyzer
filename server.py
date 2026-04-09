@@ -695,6 +695,17 @@ def save_excel():
         # Выравниваем все числовые ячейки по правому краю
         align_numeric_cells(ws)
 
+        # ===== ИЗВЛЕКАЕМ ДАННЫЕ ФИЛИАЛОВ ИЗ ИТОГОВОГО ФАЙЛА =====
+        # Вместо client-side currentDayData берём реальные значения из пересчитанных
+        # итоговых строк филиалов (колонка O = "Просрочено")
+        client_current_day_data = data.get('currentDayData', {})
+        print(f"\n=== ЗАМЕНА currentDayData: клиент прислал {len(client_current_day_data)} записей ===")
+
+        current_day_data_from_file = extract_filial_overdue(ws)
+
+        # Заменяем currentDayData в data на извлечённые значения
+        data['currentDayData'] = current_day_data_from_file
+
         # ===== СОЗДАЁМ ДОПОЛНИТЕЛЬНЫЕ ЛИСТЫ =====
 
         # data уже содержит все поля summaryData (updatedDocuments, currentDayData, summaryDT и т.д.)
@@ -1275,6 +1286,34 @@ def create_pivot_sheet_at_row(ws, headers, rows_data, title, start_row):
     ws.cell(row=row, column=len(headers) + 3).border = thin_border
 
     print(f"Сводная таблица '{title}' создана, строк: {row - start_row + 1}")
+
+
+def extract_filial_overdue(ws):
+    """Извлекает суммы просрочки из итоговых строк филиалов (колонка O = OVERDUE)
+
+    Проходит по всем строкам, находит строки начинающиеся с 'ДТ ',
+    берёт значение из колонки COLUMNS['OVERDUE'] (просрочено).
+    Используется после recalc_totals, когда итоговые строки уже пересчитаны.
+    """
+    filial_data = {}
+    for row in range(14, ws.max_row + 1):
+        # Используем get_cell_value для корректной работы с объединёнными ячейками
+        cell_value = get_cell_value(ws, row, 1)
+        if not cell_value:
+            continue
+        str_val = str(cell_value).strip()
+        # Ищем строки филиалов
+        if str_val.startswith('ДТ '):
+            overdue = get_cell_value(ws, row, COLUMNS['OVERDUE'])
+            filial_data[str_val] = overdue if isinstance(overdue, (int, float)) else 0
+    # Округляем до 2 знаков
+    for key in filial_data:
+        filial_data[key] = round(filial_data[key], 2)
+    print(f"\n=== ИЗВЛЕЧЕНЫ ДАННЫЕ ФИЛИАЛОВ (из итогового файла) ===")
+    for filial, amount in sorted(filial_data.items()):
+        print(f"  {filial}: {amount:,.2f}")
+    print(f"  Всего филиалов: {len(filial_data)}")
+    return filial_data
 
 
 if __name__ == '__main__':

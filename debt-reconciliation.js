@@ -241,6 +241,9 @@ class DebtReconciliationManager {
     }
 
     // Собрать данные по филиалам из debtData (только из колонки OVERDUE)
+    // Примечание: для таблицы динамики данные берутся сервером из итогового файла
+    // (строки "ДТ ..." → колонка O), поэтому client-side расчёт используется
+    // только как запасной вариант и для отладки.
     collectSubdivisionData() {
         const subdivisionData = {};
         let currentFilial = null;
@@ -280,22 +283,22 @@ class DebtReconciliationManager {
             // ВАЖНО: Пропускаем строки контрагентов, договоров и итого
             if (this.isDocumentRow(row) && currentFilial && !processedRows.has(i)) {
                 // Проверяем, что это не строка контрагента или договора
-                const isKontragentOrDogovor = strVal.includes('Договор') || 
+                const isKontragentOrDogovor = strVal.includes('Договор') ||
                                               strVal.includes('договор') ||
-                                              (!strVal.includes('Акт') && !strVal.includes('Реализация') && 
+                                              (!strVal.includes('Акт') && !strVal.includes('Реализация') &&
                                                !strVal.includes('Корректировка') && !strVal.includes('Поступление') &&
                                                !strVal.includes('Взаимозачет') && !strVal.includes('Взаимозачёт') &&
                                                !strVal.includes('Списание') && !strVal.includes('УПД'));
-                
+
                 // Пропускаем если это не документ
                 if (isKontragentOrDogovor) {
                     continue;
                 }
-                
+
                 // ВАЖНО: берем значение из колонки OVERDUE (просрочено)
                 const rawValue = row[this.COLUMNS.OVERDUE];
                 const overdue = this.parseExcelNumber(rawValue || 0);
-                
+
                 // Добавляем только если строка ещё не была обработана
                 subdivisionData[currentFilial] += overdue;
                 totalOverdue += overdue;
