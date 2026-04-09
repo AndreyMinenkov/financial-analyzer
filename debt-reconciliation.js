@@ -908,41 +908,26 @@ class DebtReconciliationManager {
         const previousDayData = this.getPreviousDayData();
         console.log('previousDayData (из localStorage):', JSON.stringify(previousDayData));
 
-        // Рассчитываем общие суммы для сводки ДТ
-        let totalDebt = 0;
-        let totalOverdue = 0;
-        for (let i = 0; i < this.debtData.length; i++) {
-            const row = this.debtData[i];
-            if (!row) continue;
-            if (this.isDocumentRow(row)) {
-                totalDebt += this.parseExcelNumber(row[this.COLUMNS.DEBT_AMOUNT] || 0);
-                totalOverdue += this.parseExcelNumber(row[this.COLUMNS.OVERDUE] || 0);
-            }
-        }
-        totalDebt = Math.round(totalDebt * 100) / 100;
-        totalOverdue = Math.round(totalOverdue * 100) / 100;
-
         try {
             const formData = new FormData();
             formData.append('file', this.debtFile);
 
             // Формируем объект данных для сводных таблиц
+            // Примечание: totalDebt/totalOverdue рассчитываются сервером из итогового файла
             const summaryData = {
                 updatedDocuments: this.processedDocuments,
                 // Данные для таблицы динамики
                 previousDayData: previousDayData,
-                currentDayData: this.currentSubdivisionData,  // ВАЖНО: это данные из debtData, а не из localStorage
+                currentDayData: this.currentSubdivisionData,
                 currentDate: this.formatDate(this.currentDate),
                 previousDate: 'предыдущий рабочий день',
-                // Свод задолженности ДТ
+                // Свод задолженности ДТ (судебная/не подлежащая/подлежащая — ручной ввод из настроек)
                 summaryDT: {
-                    totalDebt: totalDebt,
-                    totalOverdue: totalOverdue,
                     legal: this.summaryDT.legal,
                     notRecoverable: this.summaryDT.notRecoverable,
                     recoverable: this.summaryDT.recoverable
                 },
-                // Свод задолженности СИ УАТ
+                // Свод задолженности СИ УАТ (не используется сервером, данные берутся из файла)
                 summarySIUAT: {
                     legal: this.summarySIUAT.legal,
                     notRecoverable: this.summarySIUAT.notRecoverable,
