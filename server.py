@@ -197,23 +197,38 @@ def clear_all_intervals(ws, row):
 DOCUMENT_KEYWORDS = [
     'Акт', 'Реализация', 'Корректировка', 'Поступление',
     'Взаимозачет', 'Взаимозачёт', 'Списание', 'УПД', 'Счет-фактура',
-    'Товарная накладная', 'ТОРГ-12', 'Универсальный передаточный'
+    'Товарная накладная', 'ТОРГ-12', 'Универсальный передаточный',
+    'Определение'
 ]
 
 # Промежуточные уровни (не листья, но и не итоги)
 INTERMEDIATE_KEYWORDS = [
     'Счет на оплату', 'Счёт на оплату', 'Счет №', 'Счёт №',
-    'Договор', 'договор', 'Соглашение', 'Дополнительное соглашение'
+    'Договор', 'договор', 'Соглашение', 'Дополнительное соглашение',
+    'Передача права', 'Компенсации', 'Штрафы', 'Претензия'
 ]
 
 def find_structure(ws):
-    """Находит все строки филиалов, контрагентов, договоров, промежуточных и документов"""
-    filials = []      # строки с "ДТ "
-    kontragents = []  # контрагенты
-    intermediates = [] # промежуточные уровни (счета, договоры)
-    documents = []    # документы (листья дерева)
-    total_row = None  # строка с "Итого"
+    """Находит все строки филиалов, контрагентов, договоров, промежуточных и документов
 
+    Алгоритм определения уровней:
+    1. Филиал (ур. 0): начинается с "ДТ "
+    2. Документ (ур. 3): содержит DOCUMENT_KEYWORDS (листья дерева)
+    3. Промежуточный (ур. 2): НЕ документ, НЕ филиал, НЕ итого,
+       но имеет потомков (документы или другие промежуточные)
+    4. Контрагент (ур. 1): всё остальное — либо лист, либо родитель документов
+    5. Итого: содержит "Итого"
+
+    Промежуточные уровни определяются по наличию потомков:
+    - Если строка имеет ниже себя документы/промежуточные до следующего филиала/контрагента — это intermediate
+    - Если строка не имеет потомков — это kontragent (лист)
+    """
+    filials = []
+    kontragent_candidates = []  # потенциальные контрагенты/промежуточные
+    documents = []
+    total_row = None
+
+    # Первый проход: классифицируем по keywords
     for row in range(14, ws.max_row + 1):
         cell_value = ws.cell(row=row, column=1).value
         if not cell_value:
@@ -229,19 +244,42 @@ def find_structure(ws):
         elif 'Итого' in str_val or 'ИТОГО' in str_val:
             total_row = row
 
-        # 3. Промежуточные уровни (счета, договоры)
-        elif any(keyword in str_val for keyword in INTERMEDIATE_KEYWORDS):
-            intermediates.append(row)
-
-        # 4. Документы (листья дерева)
+        # 3. Документы по keywords (листья — Акт, Реализация, УПД и т.д.)
         elif any(keyword in str_val for keyword in DOCUMENT_KEYWORDS):
             documents.append(row)
 
-        # 5. Контрагенты (все остальное, что не попало в другие категории)
+        # 4. Остальное — кандидаты в контрагенты или промежуточные
         else:
-            # Проверяем, что это не пустая строка и не служебная
             if len(str_val) > 2 and not str_val[0].isdigit():
-                kontragents.append(row)
+                kontragent_candidates.append(row)
+
+    # Второй проход: определяем, какие kontragent_candidates имеют потомков
+    # и должны быть переклассифицированы как intermediates
+    kontragents = []
+    intermediates = []
+
+    # Создаём sorted список всех специальных строк для проверки потомков
+    all_special_sorted = sorted(filials + kontragent_candidates + documents)
+    filial_set = set(filials)
+    document_set = set(documents)
+    candidate_set = set(kontragent_candidates)
+
+    # Промежуточные по keywords: строки, содержащие INTERMEDIATE_KEYWORDS
+    # Эти строки — заголовки групп (Договор, Счёт, Соглашение и т.д.)
+    intermediate_by_keyword = set()
+    for candidate_row in kontragent_candidates:
+        cell_value = ws.cell(row=candidate_row, column=1).value
+        if cell_value:
+            str_val = str(cell_value).strip()
+            if any(keyword in str_val for keyword in INTERMEDIATE_KEYWORDS):
+                intermediate_by_keyword.add(candidate_row)
+
+    # Разделяем: intermediate_by_keyword → intermediates, остальные → kontragents
+    for candidate_row in kontragent_candidates:
+        if candidate_row in intermediate_by_keyword:
+            intermediates.append(candidate_row)
+        else:
+            kontragents.append(candidate_row)
 
     return filials, kontragents, intermediates, documents, total_row
 
@@ -343,36 +381,50 @@ def recalc_totals(ws):
         # Если нет - суммируем документы напрямую
         
         has_calculated_childs = any(c in calculated_rows for c in childs)
-        
+
         if has_calculated_childs:
             # Среди детей есть уже пересчитанные - суммируем их значения
-            # Это означает, что дети - это промежуточные уровни
-            print(f"Строка {parent_row}: суммируем пересчитанных детей {childs}")
-            
+            # Непересчитанные дети-документы уже учтены в значениях пересчитанных промежуточных,
+            # поэтому суммировать их отдельно нельзя - это приведёт к задвоению.
+            # НО: непересчитанные контрагенты-листы и документы-листы (без детей) НЕ учтены нигде,
+            # их нужно добавить к сумме.
+            calculated_childs = [c for c in childs if c in calculated_rows]
+            # Листовые контрагенты: не пересчитаны И kontragent
+            leaf_kontragents = [c for c in childs if c not in calculated_rows and c in kontragent_set]
+            # Листовые документы: не пересчитаны И document (т.е. документы без потомков)
+            leaf_docs = [c for c in childs if c not in calculated_rows and c in document_set]
+
+            all_summed_childs = calculated_childs + leaf_kontragents + leaf_docs
+
+            print(f"Строка {parent_row}: суммируем пересчитанных {calculated_childs} + листовые контрагенты {leaf_kontragents} + листовые документы {leaf_docs} (из {childs})")
+
             for col in SUM_COLUMNS:
-                total = sum(get_val(c, col) for c in childs)
+                total = sum(get_val(c, col) for c in all_summed_childs)
                 safe_set_number_format(ws, parent_row, col, total)
-            
+
             # Для дней берём максимум
-            max_day = max((get_val(c, COLUMNS['DAYS']) for c in childs), default=0)
+            max_day = max((get_val(c, COLUMNS['DAYS']) for c in all_summed_childs), default=0)
             safe_set_value(ws, parent_row, COLUMNS['DAYS'], max_day)
         else:
-            # Все дети - документы (листья) - суммируем их
+            # Нет пересчитанных детей - суммируем документы и контрагенты-листы
             doc_childs = [c for c in childs if c in document_set]
-            
-            if doc_childs:
-                print(f"Строка {parent_row}: суммируем документы {doc_childs}")
-                
+            leaf_kontragents = [c for c in childs if c in kontragent_set]
+
+            all_summed_childs = doc_childs + leaf_kontragents
+
+            if all_summed_childs:
+                print(f"Строка {parent_row}: суммируем документы {doc_childs} + листовые контрагенты {leaf_kontragents}")
+
                 for col in SUM_COLUMNS:
-                    total = sum(get_val(c, col) for c in doc_childs)
+                    total = sum(get_val(c, col) for c in all_summed_childs)
                     safe_set_number_format(ws, parent_row, col, total)
-                
-                max_day = max((get_val(c, COLUMNS['DAYS']) for c in doc_childs), default=0)
+
+                max_day = max((get_val(c, COLUMNS['DAYS']) for c in all_summed_childs), default=0)
                 safe_set_value(ws, parent_row, COLUMNS['DAYS'], max_day)
             else:
-                # Дети - не документы (например, контрагенты без детей)
+                # Дети - не документы и не контрагенты (например, промежуточные без детей)
                 # Оставляем как есть
-                print(f"Строка {parent_row}: дети не документы, пропускаем")
+                print(f"Строка {parent_row}: дети не документы и не контрагенты, пропускаем")
                 continue
         
         calculated_rows.add(parent_row)
