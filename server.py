@@ -274,9 +274,38 @@ def find_structure(ws):
             if any(keyword in str_val for keyword in INTERMEDIATE_KEYWORDS):
                 intermediate_by_keyword.add(candidate_row)
 
-    # Разделяем: intermediate_by_keyword → intermediates, остальные → kontragents
+    # Разделяем candidates:
+    # 1. intermediate_by_keyword → сразу intermediates
+    # 2. Остальные: проверяем наличие ПРЯМЫХ потомков-документов
+    #    (документ между candidate и следующим intermediate/контрагентом)
     for candidate_row in kontragent_candidates:
         if candidate_row in intermediate_by_keyword:
+            intermediates.append(candidate_row)
+            continue
+
+        # Проверяем, есть ли у candidate прямые потомки-документы
+        # (т.е. документ до следующего intermediate/контрагента/филиала)
+        candidate_idx = all_special_sorted.index(candidate_row)
+        has_direct_document_child = False
+
+        for j in range(candidate_idx + 1, len(all_special_sorted)):
+            next_row = all_special_sorted[j]
+
+            # Нашли следующий филиал или контрагент-кандидат — потомков нет
+            if next_row in filial_set or next_row in candidate_set:
+                break
+
+            # Нашли intermediate_by_keyword — document не прямой потомок candidate,
+            # а потомок этого intermediate. candidate = kontragent.
+            if next_row in intermediate_by_keyword:
+                break
+
+            # Нашли document — прямой потомок candidate → это intermediate
+            if next_row in document_set:
+                has_direct_document_child = True
+                break
+
+        if has_direct_document_child:
             intermediates.append(candidate_row)
         else:
             kontragents.append(candidate_row)
