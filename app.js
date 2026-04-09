@@ -19,6 +19,7 @@ class App {
         this.setupContractorsManager();
         this.loadCurrentPage();
         this.updateStats();
+        this.updatePreviousDayIndicator();
 
         // Устанавливаем сегодняшнюю дату по умолчанию
         const today = new Date().toISOString().split('T')[0];
@@ -346,6 +347,13 @@ class App {
             this.clearReconciliationData();
         });
 
+        // Кнопка сохранения данных текущего дня
+        document.getElementById('saveCurrentDayBtn').addEventListener('click', () => {
+            this.debtManager.saveCurrentDayData();
+            this.updatePreviousDayIndicator();
+            this.showNotification('Данные текущего дня сохранены', 'success');
+        });
+
         // Кнопка настроек сводных таблиц
         document.getElementById('summarySettingsBtn').addEventListener('click', () => {
             this.openSummarySettingsModal();
@@ -397,6 +405,48 @@ class App {
             if (e.dataTransfer.files.length > 0) {
                 this.loadSiUatFile(e.dataTransfer.files[0]);
             }
+        });
+
+        // ===== Загрузка файла предыдущего дня =====
+        const previousDayUploadArea = document.getElementById('previousDayFileUploadArea');
+        const previousDayFileInput = document.getElementById('previousDayFileInput');
+        const clearPreviousDayBtn = document.getElementById('clearPreviousDayBtn');
+
+        // Клик по зоне загрузки → открываем выбор файла
+        previousDayUploadArea.addEventListener('click', () => {
+            previousDayFileInput.click();
+        });
+
+        previousDayFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                this.handlePreviousDayFileUpload(e.target.files[0]);
+            }
+        });
+
+        // Drag & drop
+        previousDayUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            previousDayUploadArea.style.borderColor = 'var(--primary)';
+            previousDayUploadArea.style.background = 'rgba(59, 130, 246, 0.05)';
+        });
+
+        previousDayUploadArea.addEventListener('dragleave', () => {
+            previousDayUploadArea.style.borderColor = '';
+            previousDayUploadArea.style.background = '';
+        });
+
+        previousDayUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            previousDayUploadArea.style.borderColor = '';
+            previousDayUploadArea.style.background = '';
+            if (e.dataTransfer.files.length > 0) {
+                this.handlePreviousDayFileUpload(e.dataTransfer.files[0]);
+            }
+        });
+
+        // Кнопка очистки данных предыдущего дня
+        clearPreviousDayBtn.addEventListener('click', () => {
+            this.clearPreviousDayData();
         });
 
         // Клик вне модального окна настроек
@@ -555,6 +605,7 @@ class App {
                 this.showReconciliationStats(this.debtManager.getStats());
                 this.showReconciliationLog(this.debtManager.getProcessedLog());
                 document.getElementById('exportReconciledBtn').disabled = false;
+                document.getElementById('saveCurrentDayBtn').disabled = false;
                 // Обновляем индикатор данных предыдущего дня
                 this.updatePreviousDayIndicator();
                 this.showNotification(result.message, 'success');
@@ -628,6 +679,7 @@ class App {
         document.getElementById('reconciliationStats').style.display = 'none';
         document.getElementById('reconciliationLog').style.display = 'none';
         document.getElementById('exportReconciledBtn').disabled = true;
+        document.getElementById('saveCurrentDayBtn').disabled = true;
         document.getElementById('reconcileBtn').disabled = true;
         document.getElementById('previousDayIndicator').style.display = 'none';
         this.showNotification('Данные очищены', 'info');
@@ -664,39 +716,86 @@ class App {
         document.getElementById('summarySiuatNotRecoverable').value = this.debtManager.summarySIUAT.notRecoverable || '';
         document.getElementById('summarySiuatRecoverable').value = this.debtManager.summarySIUAT.recoverable || '';
 
-        // Заполняем таблицу данных предыдущего дня
-        this.renderPreviousDayDataTable();
+        // Обновляем UI загрузки файла предыдущего дня
+        this.renderPreviousDayFileUploadUI();
 
         document.getElementById('summarySettingsModal').classList.add('active');
     }
 
-    // Отрисовка таблицы данных предыдущего дня
-    renderPreviousDayDataTable() {
-        const tbody = document.getElementById('previousDayDataBody');
-        const currentData = this.debtManager.currentSubdivisionData;
-
-        if (Object.keys(currentData).length === 0) {
-            tbody.innerHTML = '<tr class="empty-row"><td colspan="2">Сначала выполните сверку</td></tr>';
-            return;
+    // Обработка загрузки файла предыдущего дня
+    async handlePreviousDayFileUpload(file) {
+        this.showLoading();
+        try {
+            const result = await this.debtManager.loadPreviousDayFile(file);
+            if (result.success) {
+                this.renderPreviousDayFileUploadUI();
+                this.updatePreviousDayIndicator();
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            console.error('Ошибка загрузки файла предыдущего дня:', error);
+            this.showNotification('Ошибка загрузки файла: ' + error.message, 'error');
+        } finally {
+            this.hideLoading();
         }
+    }
 
-        // Получаем данные предыдущего дня
+    // Отрисовка UI загрузки файла предыдущего дня
+    renderPreviousDayFileUploadUI() {
         const previousData = this.debtManager.getPreviousDayData();
+        const uploadArea = document.getElementById('previousDayFileUploadArea');
+        const statusDiv = document.getElementById('previousDayFileStatus');
+        const dataContainer = document.getElementById('previousDayDataContainer');
+        const fileNameSpan = document.getElementById('previousDayFileName');
+        const rowCountSpan = document.getElementById('previousDayRowCount');
+        const tbody = document.getElementById('previousDayDataBody');
 
-        let html = '';
-        // Сортируем филиалы по названию
-        const sortedFilials = Object.keys(currentData).sort();
+        // Проверяем, есть ли сохранённые данные
+        const hasData = Object.keys(previousData).length > 0;
 
-        sortedFilials.forEach(filial => {
-            const currentAmount = currentData[filial] || 0;
-            const previousAmount = previousData[filial] || 0;
-            html += `<tr>
-                <td>${this.escapeHtml(filial)}</td>
-                <td><input type="number" step="0.01" class="prev-day-input" data-filial="${this.escapeHtml(filial)}" value="${previousAmount}"></td>
-            </tr>`;
-        });
+        if (hasData) {
+            // Показываем статус и таблицу, скрываем зону загрузки
+            uploadArea.style.display = 'none';
+            statusDiv.style.display = 'block';
+            dataContainer.style.display = 'block';
 
-        tbody.innerHTML = html;
+            fileNameSpan.textContent = 'Данные предыдущего дня';
+            rowCountSpan.textContent = `(${Object.keys(previousData).length} подразделений)`;
+
+            // Заполняем таблицу (только для чтения, без инпутов)
+            let html = '';
+            const sortedFilials = Object.keys(previousData).sort();
+            sortedFilials.forEach(filial => {
+                const amount = previousData[filial] || 0;
+                html += `<tr>
+                    <td>${this.escapeHtml(filial)}</td>
+                    <td style="text-align: right;">${amount.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                </tr>`;
+            });
+            tbody.innerHTML = html;
+        } else {
+            // Показываем зону загрузки, скрываем статус и таблицу
+            uploadArea.style.display = 'block';
+            statusDiv.style.display = 'none';
+            dataContainer.style.display = 'none';
+            tbody.innerHTML = '';
+        }
+    }
+
+    // Очистка данных предыдущего дня
+    clearPreviousDayData() {
+        if (!confirm('Удалить сохранённые данные предыдущего дня?')) return;
+
+        const result = this.debtManager.clearPreviousDayData();
+        if (result.success) {
+            this.renderPreviousDayFileUploadUI();
+            this.updatePreviousDayIndicator();
+            this.showNotification(result.message, 'success');
+        } else {
+            this.showNotification(result.message, 'error');
+        }
     }
 
     // Сохранение настроек сводных
@@ -714,22 +813,6 @@ class App {
             notRecoverable: parseFloat(document.getElementById('summarySiuatNotRecoverable').value) || 0,
             recoverable: parseFloat(document.getElementById('summarySiuatRecoverable').value) || 0
         };
-
-        // Сохраняем данные предыдущего дня из таблицы (единый ключ для ручных данных)
-        const inputs = document.querySelectorAll('.prev-day-input');
-        const previousDayData = {};
-        inputs.forEach(input => {
-            const filial = input.dataset.filial;
-            const value = parseFloat(input.value) || 0;
-            previousDayData[filial] = value;
-        });
-
-        // Сохраняем в localStorage под единым ключом
-        try {
-            localStorage.setItem('previousDayDebt_manual', JSON.stringify(previousDayData));
-        } catch (e) {
-            console.error('Ошибка сохранения данных предыдущего дня:', e);
-        }
 
         // Сохраняем сводные данные
         this.debtManager.saveSummaryData();

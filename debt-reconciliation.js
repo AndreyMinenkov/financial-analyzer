@@ -125,6 +125,121 @@ class DebtReconciliationManager {
         }
     }
 
+    // Загрузить файл предыдущего дня (Excel с колонками: Подразделение, Сумма ПДЗ)
+    async loadPreviousDayFile(file) {
+        console.log('Загрузка файла данных предыдущего дня:', file.name);
+        try {
+            const arrayBuffer = await this.readFileAsArrayBuffer(file);
+
+            const workbook = XLSX.read(arrayBuffer, {
+                type: 'array',
+                cellDates: true,
+                raw: true
+            });
+
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+
+            const rows = XLSX.utils.sheet_to_json(worksheet, {
+                header: 1,
+                defval: null,
+                raw: true
+            });
+
+            if (rows.length < 2) {
+                return {
+                    success: false,
+                    message: 'Файл не содержит данных (минимум 1 строка данных + заголовок)'
+                };
+            }
+
+            const headers = rows[0] || [];
+
+            // Ищем колонку подразделения (первая колонка — "Подразделение" или просто A)
+            let filialCol = 0; // по умолчанию первая
+            const filialSearch = ['подразделение', 'филиал', 'дт', 'branch'];
+            for (let i = 0; i < headers.length; i++) {
+                if (headers[i]) {
+                    const h = String(headers[i]).toLowerCase();
+                    if (filialSearch.some(s => h.includes(s))) {
+                        filialCol = i;
+                        break;
+                    }
+                }
+            }
+
+            // Ищем колонку суммы (вторая колонка — "Сумма ПДЗ" или просто B)
+            let amountCol = 1; // по умолчанию вторая
+            const amountSearch = ['сумма', 'пдз', 'amount', 'зад', 'просроч'];
+            for (let i = 0; i < headers.length; i++) {
+                if (headers[i]) {
+                    const h = String(headers[i]).toLowerCase();
+                    if (amountSearch.some(s => h.includes(s))) {
+                        amountCol = i;
+                        break;
+                    }
+                }
+            }
+
+            console.log('Найдены колонки: подразделение=' + (filialCol + 1) + ', сумма=' + (amountCol + 1));
+
+            // Парсим данные
+            const previousDayData = {};
+            let rowCount = 0;
+
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                if (!row || row.length === 0) continue;
+
+                const filial = row[filialCol];
+                if (!filial || String(filial).trim() === '') continue;
+
+                const filialName = String(filial).trim();
+                const amount = this.parseExcelNumber(row[amountCol] || 0);
+
+                previousDayData[filialName] = amount;
+                rowCount++;
+            }
+
+            if (rowCount === 0) {
+                return {
+                    success: false,
+                    message: 'Не найдено ни одной записи с подразделением'
+                };
+            }
+
+            // Сохраняем в localStorage
+            localStorage.setItem('previousDayDebt_manual', JSON.stringify(previousDayData));
+            console.log(`Загружено ${rowCount} подразделений из файла предыдущего дня`);
+
+            return {
+                success: true,
+                message: `Загружено ${rowCount} подразделений из файла "${file.name}"`,
+                data: previousDayData,
+                rowCount: rowCount,
+                fileName: file.name
+            };
+        } catch (error) {
+            console.error('Ошибка загрузки файла предыдущего дня:', error);
+            return {
+                success: false,
+                message: 'Ошибка загрузки файла: ' + error.message
+            };
+        }
+    }
+
+    // Очистить данные предыдущего дня
+    clearPreviousDayData() {
+        try {
+            localStorage.removeItem('previousDayDebt_manual');
+            console.log('Данные предыдущего дня удалены');
+            return { success: true, message: 'Данные предыдущего дня удалены' };
+        } catch (e) {
+            console.error('Ошибка удаления данных предыдущего дня:', e);
+            return { success: false, message: 'Ошибка: ' + e.message };
+        }
+    }
+
     // Собрать данные по филиалам из debtData (только из колонки OVERDUE)
     collectSubdivisionData() {
         const subdivisionData = {};
