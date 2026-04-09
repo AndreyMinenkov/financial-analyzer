@@ -971,6 +971,8 @@ def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_de
 
     print(f"Лист 'Сводные таблицы' создан, последняя строка: {row}")
 
+
+@app.route('/save-suppliers', methods=['POST'])
 def save_suppliers():
     """Обработка и сохранение сводных таблиц оплат поставщикам
 
