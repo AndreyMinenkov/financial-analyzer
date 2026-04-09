@@ -719,13 +719,15 @@ def save_excel():
                 siuat_wb = openpyxl.load_workbook(io.BytesIO(siuat_file.read()))
                 siuat_ws = siuat_wb.active
 
+                # Переименовываем исходный лист СИ УАТ ПЕРЕД копированием,
+                # чтобы избежать конфликта имён (Excel может переименовать в "Свод Д31")
+                siuat_ws.title = 'Свод ДЗ СИ УАТ'
+
                 # Полное копирование с сохранением всего форматирования
                 # (функция возвращает созданный лист)
                 new_siuat_ws = copy_worksheet_full(siuat_ws, wb)
 
-                # Переименовываем скопированный лист
-                new_siuat_ws.title = 'Свод ДЗ СИ УАТ'
-                print(f"Лист переименован в 'Свод ДЗ СИ УАТ', все листы: {wb.sheetnames}")
+                print(f"Лист 'Свод ДЗ СИ УАТ' добавлен, все листы: {wb.sheetnames}")
 
                 # Извлекаем общую ДЗ и ПДЗ из СИ УАТ
                 siuat_totals = extract_siuat_totals(new_siuat_ws)
@@ -1174,42 +1176,29 @@ def extract_total_row_debt(ws, total_row):
 
 
 def extract_siuat_totals(ws):
-    """Извлекает общую ДЗ (колонка L) и ПДЗ (колонка O) из итоговой строки СИ УАТ
+    """Извлекает общую ДЗ и ПДЗ из файла СИ УАТ по максимальным значениям в колонках.
 
-    Ищет строку 'Итого' по всей первой колонке и берёт значения из колонок L и O.
-    Если не найдена по тексту 'Итого', ищет последнюю непустую строку с данными.
+    Берёт максимальное число из колонки L (общая ДЗ) и колонки O (ПДЗ).
     """
     result = {'totalDebt': 0, 'totalOverdue': 0}
-    итоговая_row = None
 
-    # Ищем строку с "Итого"
+    # Ищем максимальное значение в колонке L (общая ДЗ)
+    max_debt = 0
     for row in range(1, ws.max_row + 1):
-        cell_value = get_cell_value(ws, row, 1)
-        if not cell_value:
-            continue
-        str_val = str(cell_value).strip()
-        if 'Итого' in str_val or 'ИТОГО' in str_val:
-            итоговая_row = row
-            break
+        val = get_cell_value(ws, row, COLUMNS['DEBT_AMOUNT'])
+        if isinstance(val, (int, float)) and val > max_debt:
+            max_debt = val
 
-    if not итоговая_row:
-        # Fallback: ищем последнюю строку с данными в колонке L (общая ДЗ)
-        for row in range(ws.max_row, 1, -1):
-            val_l = get_cell_value(ws, row, COLUMNS['DEBT_AMOUNT'])
-            if val_l and isinstance(val_l, (int, float)) and val_l > 0:
-                итоговая_row = row
-                print(f"  'Итого' не найдена, используем последнюю строку с данными: {row}")
-                break
+    # Ищем максимальное значение в колонке O (ПДЗ)
+    max_overdue = 0
+    for row in range(1, ws.max_row + 1):
+        val = get_cell_value(ws, row, COLUMNS['OVERDUE'])
+        if isinstance(val, (int, float)) and val > max_overdue:
+            max_overdue = val
 
-    if итоговая_row:
-        print(f"  Используем строку {итоговая_row} для извлечения сумм СИ УАТ")
-        total_debt = get_cell_value(ws, итоговая_row, COLUMNS['DEBT_AMOUNT'])
-        total_overdue = get_cell_value(ws, итоговая_row, COLUMNS['OVERDUE'])
-        result['totalDebt'] = round(total_debt, 2) if isinstance(total_debt, (int, float)) else 0
-        result['totalOverdue'] = round(total_overdue, 2) if isinstance(total_overdue, (int, float)) else 0
-        print(f"  СИ УАТ totals из строки {итоговая_row}: totalDebt={result['totalDebt']}, totalOverdue={result['totalOverdue']}")
-    else:
-        print("  !!! Не найдена итоговая строка СИ УАТ")
+    result['totalDebt'] = round(max_debt, 2)
+    result['totalOverdue'] = round(max_overdue, 2)
+    print(f"  СИ УАТ totals (по максимуму): totalDebt={result['totalDebt']}, totalOverdue={result['totalOverdue']}")
 
     return result
 
