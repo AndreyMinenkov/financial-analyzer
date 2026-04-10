@@ -586,40 +586,67 @@ def save_excel():
         # Выравниваем все числовые ячейки по правому краю
         align_numeric_cells(ws)
 
-        # ===== СОЗДАЁМ ДОПОЛНИТЕЛЬНЫЕ ЛИСТЫ =====
+        # ===== 1. ПЕРЕИМЕНОВЫВАЕМ ГЛАВНЫЙ ЛИСТ =====
+        ws.title = 'Свод ДЗ'
+        print(f"\nГлавный лист переименован в 'Свод ДЗ'")
 
-        # data уже содержит все поля summaryData (updatedDocuments, currentDayData, summaryDT и т.д.)
-        print(f"\n=== Ключи в data: {list(data.keys())}")
+        # ===== 2. ИЗВЛЕКАЕМ ДАННЫЕ ИЗ ИТОГОВОГО ФАЙЛА =====
 
-        # 1. Лист «Свод ДЗ СИ УАТ» — копируем из загруженного файла с ПОЛНЫМ форматированием
+        # 2a. Просрочка по филиалам (для таблицы динамики)
+        current_day_data_from_file = extract_filial_overdue(ws)
+        data['currentDayData'] = current_day_data_from_file
+
+        # 2b. Общая ДЗ и ПДЗ из итоговой строки (для "Свод задолженности ДТ")
+        total_debt_data = extract_total_row_debt(ws, total_row)
+        print(f"Из итоговой строки ДТ: общая ДЗ={total_debt_data['totalDebt']}, ПДЗ={total_debt_data['totalOverdue']}")
+
+        # ===== 3. ДОБАВЛЯЕМ ЛИСТ «Свод ДЗ СИ УАТ» =====
         siuat_file = request.files.get('siUatFile')
+        siuat_total_debt = 0
+        siuat_total_overdue = 0
         if siuat_file and siuat_file.filename:
             print(f"\n=== ДОБАВЛЯЕМ ЛИСТ 'Свод ДЗ СИ УАТ' из файла {siuat_file.filename} ===")
             try:
                 siuat_wb = openpyxl.load_workbook(io.BytesIO(siuat_file.read()))
                 siuat_ws = siuat_wb.active
 
-                # Полное копирование с сохранением всего форматирования
-                copy_worksheet_full(siuat_ws, wb)
+                # Переименовываем исходный лист СИ УАТ ПЕРЕД копированием,
+                # чтобы избежать конфликта имён (Excel может переименовать в "Свод Д31")
+                siuat_ws.title = 'Свод ДЗ СИ УАТ'
 
-                print("Лист 'Свод ДЗ СИ УАТ' добавлен с полным форматированием")
+                # Полное копирование с сохранением всего форматирования
+                # (функция возвращает созданный лист)
+                new_siuat_ws = copy_worksheet_full(siuat_ws, wb)
+
+                print(f"Лист 'Свод ДЗ СИ УАТ' добавлен, все листы: {wb.sheetnames}")
+
+                # Извлекаем общую ДЗ и ПДЗ из СИ УАТ
+                siuat_totals = extract_siuat_totals(new_siuat_ws)
+                siuat_total_debt = siuat_totals['totalDebt']
+                siuat_total_overdue = siuat_totals['totalOverdue']
+                print(f"СИ УАТ: общая ДЗ={siuat_total_debt}, ПДЗ={siuat_total_overdue}")
+
             except Exception as e:
                 print(f"!!! Ошибка при добавлении листа СИ УАТ: {e}")
                 traceback.print_exc()
         else:
             print("Файл СИ УАТ не загружен, пропускаем лист 'Свод ДЗ СИ УАТ'")
 
-        # 2. Лист «Сводные таблицы»
+        # ===== 4. СОЗДАЁМ ЛИСТ «Сводные таблицы» =====
         print("\n=== СОЗДАЁМ ЛИСТ 'Сводные таблицы' ===")
-        print(f"currentDayData: {json.dumps(data.get('currentDayData', {}), ensure_ascii=False)[:300]}")
-        print(f"previousDayData: {json.dumps(data.get('previousDayData', {}), ensure_ascii=False)[:300]}")
-        print(f"summaryDT: {data.get('summaryDT', {})}")
         try:
             summary_ws = wb.create_sheet('Сводные таблицы')
-            create_summary_sheet(summary_ws, data)
-            print("Лист 'Сводные таблицы' создан успешно")
+            create_summary_sheet(
+                summary_ws,
+                data,
+                total_debt=total_debt_data['totalDebt'],
+                total_overdue=total_debt_data['totalOverdue'],
+                siuat_total_debt=siuat_total_debt,
+                siuat_total_overdue=siuat_total_overdue,
+            )
+            print("Лист 'Сводные таблицы' создан")
         except Exception as e:
-            print(f"!!! Ошибка при создании листа 'Сводные таблицы': {e}")
+            print(f"!!! Ошибка при создании листа сводных таблиц: {e}")
             traceback.print_exc()
 
         # Сохраняем результат
@@ -642,11 +669,11 @@ def save_excel():
         traceback.print_exc()
         return {'error': str(e)}, 500
 
-def create_summary_sheet(ws, data):
+def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_debt=0, siuat_total_overdue=0):
     """Создаёт лист 'Сводные таблицы' с тремя блоками:
     1. Динамика по подразделениям
-    2. Свод задолженности ДТ
-    3. Свод задолженности СИ УАТ
+    2. Свод задолженности ДТ (данные из итогового файла)
+    3. Свод задолженности СИ УАТ (2 строки: Общая ДЗ, Из них ПДЗ)
     """
     print("Создание листа 'Сводные таблицы'...")
 
@@ -654,8 +681,6 @@ def create_summary_sheet(ws, data):
     previous_date = data.get('previousDate', '')
     current_day_data = data.get('currentDayData', {})
     previous_day_data = data.get('previousDayData', {})
-    summary_dt = data.get('summaryDT', {})
-    summary_siuat = data.get('summarySIUAT', {})
 
     # Стили
     title_font = Font(bold=True, size=14)
@@ -680,7 +705,6 @@ def create_summary_sheet(ws, data):
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
     row += 2
 
-    # Заголовки
     headers = ['Подразделение', current_date, previous_date, 'Динамика']
     for col, header in enumerate(headers, 1):
         cell = ws.cell(row=row, column=col, value=header)
@@ -690,9 +714,7 @@ def create_summary_sheet(ws, data):
         cell.border = thin_border
     row += 1
 
-    # Собираем все подразделения
     all_filials = sorted(set(list(current_day_data.keys()) + list(previous_day_data.keys())))
-
     total_current = 0
     total_previous = 0
     total_delta = 0
@@ -701,7 +723,6 @@ def create_summary_sheet(ws, data):
         current_val = current_day_data.get(filial, 0)
         previous_val = previous_day_data.get(filial, 0)
         delta = current_val - previous_val
-
         total_current += current_val
         total_previous += previous_val
         total_delta += delta
@@ -711,44 +732,35 @@ def create_summary_sheet(ws, data):
         cell_curr.number_format = number_format
         cell_curr.border = thin_border
         cell_curr.alignment = Alignment(horizontal='right')
-
         cell_prev = ws.cell(row=row, column=3, value=previous_val)
         cell_prev.number_format = number_format
         cell_prev.border = thin_border
         cell_prev.alignment = Alignment(horizontal='right')
-
         cell_delta = ws.cell(row=row, column=4, value=delta)
         cell_delta.number_format = number_format
         cell_delta.border = thin_border
         cell_delta.alignment = Alignment(horizontal='right')
-
-        # Цветовая индикация
         if delta > 0:
             cell_delta.fill = red_fill
         elif delta < 0:
             cell_delta.fill = green_fill
-
         row += 1
 
-    # Итоговая строка
     ws.cell(row=row, column=1, value='Общий итог').font = total_font
     ws.cell(row=row, column=1).fill = total_fill
     ws.cell(row=row, column=1).border = thin_border
-
     cell = ws.cell(row=row, column=2, value=total_current)
     cell.number_format = number_format
     cell.font = total_font
     cell.fill = total_fill
     cell.border = thin_border
     cell.alignment = Alignment(horizontal='right')
-
     cell = ws.cell(row=row, column=3, value=total_previous)
     cell.number_format = number_format
     cell.font = total_font
     cell.fill = total_fill
     cell.border = thin_border
     cell.alignment = Alignment(horizontal='right')
-
     cell = ws.cell(row=row, column=4, value=total_delta)
     cell.number_format = number_format
     cell.font = total_font
@@ -759,7 +771,6 @@ def create_summary_sheet(ws, data):
         cell.fill = PatternFill(start_color='FFB4B4', end_color='FFB4B4', fill_type='solid')
     elif total_delta < 0:
         cell.fill = PatternFill(start_color='A5D6A7', end_color='A5D6A7', fill_type='solid')
-
     row += 3
 
     # ===== ТАБЛИЦА 2: Свод задолженности ДТ =====
@@ -767,22 +778,55 @@ def create_summary_sheet(ws, data):
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
     row += 2
 
+    summary_dt = data.get('summaryDT', {})
+    print(f"Свод ДТ: общая ДЗ={total_debt}, ПДЗ={total_overdue}, судебная={summary_dt.get('legal', 0)}")
+
     summary_dt_data = [
-        ('общая ДЗ', summary_dt.get('totalDebt', 0)),
-        ('из них ПДЗ', summary_dt.get('totalOverdue', 0)),
+        ('общая ДЗ', total_debt),
+        ('из них ПДЗ', total_overdue),
         ('в т.ч. Судебная', summary_dt.get('legal', 0)),
         ('не подлежащая к взысканию', summary_dt.get('notRecoverable', 0)),
         ('подлежащая к взысканию', summary_dt.get('recoverable', 0)),
     ]
-
     for label, value in summary_dt_data:
+        cell_label = ws.cell(row=row, column=1, value=label)
+        cell_label.border = thin_border
+        if 'ПДЗ' in label:
+            cell_label.font = Font(bold=True, color='FF0000')
+        elif 'Судебная' in label:
+            cell_label.font = Font(bold=True, color='0000FF')
+        else:
+            cell_label.font = Font(bold=True)
+        cell_value = ws.cell(row=row, column=2, value=value)
+        cell_value.number_format = number_format
+        cell_value.border = thin_border
+        cell_value.alignment = Alignment(horizontal='right')
+        if 'ПДЗ' in label:
+            cell_value.font = Font(bold=True, color='FF0000')
+        elif 'Судебная' in label:
+            cell_value.font = Font(bold=True, color='0000FF')
+        else:
+            cell_value.font = Font(bold=True)
+        row += 1
+    row += 3
+
+    # ===== ТАБЛИЦА 3: Свод задолженности СИ УАТ =====
+    ws.cell(row=row, column=1, value='Свод задолженности СИ УАТ').font = title_font
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+    row += 2
+
+    print(f"Свод СИ УАТ: общая ДЗ={siuat_total_debt}, ПДЗ={siuat_total_overdue}")
+    summary_siuat_data = [
+        ('Общая ДЗ', siuat_total_debt),
+        ('Из них ПДЗ', siuat_total_overdue),
+    ]
+    for label, value in summary_siuat_data:
         cell_label = ws.cell(row=row, column=1, value=label)
         cell_label.border = thin_border
         if 'ПДЗ' in label:
             cell_label.font = Font(bold=True, color='FF0000')
         else:
             cell_label.font = Font(bold=True)
-
         cell_value = ws.cell(row=row, column=2, value=value)
         cell_value.number_format = number_format
         cell_value.border = thin_border
@@ -793,32 +837,224 @@ def create_summary_sheet(ws, data):
             cell_value.font = Font(bold=True)
         row += 1
 
+    print(f"Лист 'Сводные таблицы' создан, последняя строка: {row}")
+
+
+def extract_filial_overdue(ws):
+    """Извлекает суммы просрочки из итоговых строк филиалов (колонка O = OVERDUE)"""
+    filial_data = {}
+    for row in range(14, ws.max_row + 1):
+        cell_value = get_cell_value(ws, row, 1)
+        if not cell_value:
+            continue
+        str_val = str(cell_value).strip()
+        if str_val.startswith('ДТ '):
+            overdue = get_cell_value(ws, row, COLUMNS['OVERDUE'])
+            filial_data[str_val] = overdue if isinstance(overdue, (int, float)) else 0
+    for key in filial_data:
+        filial_data[key] = round(filial_data[key], 2)
+    print(f"\n=== ИЗВЛЕЧЕНЫ ДАННЫЕ ФИЛИАЛОВ ===")
+    for filial, amount in sorted(filial_data.items()):
+        print(f"  {filial}: {amount:,.2f}")
+    return filial_data
+
+
+def extract_total_row_debt(ws, total_row):
+    """Извлекает общую ДЗ (колонка L) и ПДЗ (колонка O) из итоговой строки"""
+    result = {'totalDebt': 0, 'totalOverdue': 0}
+    if not total_row:
+        return result
+    total_debt = get_cell_value(ws, total_row, COLUMNS['DEBT_AMOUNT'])
+    total_overdue = get_cell_value(ws, total_row, COLUMNS['OVERDUE'])
+    result['totalDebt'] = round(total_debt, 2) if isinstance(total_debt, (int, float)) else 0
+    result['totalOverdue'] = round(total_overdue, 2) if isinstance(total_overdue, (int, float)) else 0
+    return result
+
+
+def extract_siuat_totals(ws):
+    """Извлекает общую ДЗ и ПДЗ из файла СИ УАТ по максимальным значениям в колонках."""
+    result = {'totalDebt': 0, 'totalOverdue': 0}
+
+    # Сначала ищем колонки по заголовкам
+    debt_col = None
+    overdue_col = None
+    debt_keywords = ['всего', 'общая', 'сумма долга', 'долг', 'общая дз', 'общая задолженность']
+    overdue_keywords = ['просрочено', 'пдз', 'просроч', 'свыше', 'просроченная']
+
+    for col in range(1, 30):
+        header = get_cell_value(ws, 1, col)
+        if not header:
+            continue
+        h_str = str(header).lower().strip()
+        if debt_col is None:
+            for kw in debt_keywords:
+                if kw in h_str:
+                    debt_col = col
+                    print(f"  Найдена колонка общей ДЗ: колонка {col} = '{header}'")
+                    break
+        if overdue_col is None:
+            for kw in overdue_keywords:
+                if kw in h_str:
+                    overdue_col = col
+                    print(f"  Найдена колонка ПДЗ: колонка {col} = '{header}'")
+                    break
+
+    if debt_col is None:
+        debt_col = COLUMNS['DEBT_AMOUNT']
+        print(f"  Колонка общей ДЗ не найдена по заголовку, используем L (колонка {debt_col})")
+    if overdue_col is None:
+        overdue_col = COLUMNS['OVERDUE']
+        print(f"  Колонка ПДЗ не найдена по заголовку, используем O (колонка {overdue_col})")
+
+    max_debt = 0
+    for row in range(1, ws.max_row + 1):
+        val = get_cell_value(ws, row, debt_col)
+        if isinstance(val, (int, float)) and val > max_debt:
+            max_debt = val
+    max_overdue = 0
+    for row in range(1, ws.max_row + 1):
+        val = get_cell_value(ws, row, overdue_col)
+        if isinstance(val, (int, float)) and val > max_overdue:
+            max_overdue = val
+
+    result['totalDebt'] = round(max_debt, 2)
+    result['totalOverdue'] = round(max_overdue, 2)
+    print(f"  СИ УАТ totals: колонка ДЗ={debt_col}, колонка ПДЗ={overdue_col}, totalDebt={result['totalDebt']}, totalOverdue={result['totalOverdue']}")
+    return result
+
+
+@app.route('/save-suppliers', methods=['POST'])
+def save_suppliers():
+    """Обработка и сохранение сводных таблиц оплат поставщикам"""
+    try:
+        file = request.files['file']
+        data = json.loads(request.form['data'])
+
+        print(f"\n=== ПОЛУЧЕН ЗАПРОС НА ОБРАБОТКУ ОПЛАТ ПОСТАВЩИКАМ ===")
+        print(f"Файл: {file.filename}")
+        print(f"Сводных таблиц: {len(data.get('pivotTables', []))}")
+
+        wb = openpyxl.load_workbook(io.BytesIO(file.read()))
+
+        for pivot_table in data.get('pivotTables', []):
+            sheet_name = pivot_table['sheetName']
+            headers = pivot_table['headers']
+            rows_data = pivot_table['data']
+
+            print(f"\nОбработка сводной таблицы: {sheet_name}")
+            print(f"  Подразделений: {len(headers)}")
+            print(f"  Контрагентов: {len(rows_data)}")
+
+            if sheet_name not in wb.sheetnames:
+                print(f"  Предупреждение: лист '{sheet_name}' не найден, создаём новый")
+                ws = wb.create_sheet(sheet_name)
+                last_row = 0
+            else:
+                ws = wb[sheet_name]
+                last_row = ws.max_row
+                print(f"  Реестр заканчивается на строке: {last_row}")
+
+            pivot_start_row = last_row + 4
+            create_pivot_sheet_at_row(ws, headers, rows_data, 'Сводная таблица', pivot_start_row)
+            print(f"  Сводная таблица добавлена со строки: {pivot_start_row}")
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        print("\n=== ФАЙЛ ОПЛАТ УСПЕШНО ОБРАБОТАН, ОТПРАВЛЯЕМ ===\n")
+
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=f'Оплаты_поставщикам_{datetime.now().strftime("%Y-%m-%d")}.xlsx',
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+
+    except Exception as e:
+        print("\n!!! ОШИБКА ПРИ ОБРАБОТКЕ ОПЛАТ !!!")
+        print(str(e))
+        traceback.print_exc()
+        return {'error': str(e)}, 500
+
+
+def create_pivot_sheet_at_row(ws, headers, rows_data, title, start_row):
+    """Создаёт сводную таблицу оплат поставщикам начиная с указанной строки"""
+    print(f"Создание сводной таблицы '{title}', начиная со строки {start_row}...")
+
+    title_font = Font(bold=True, size=14)
+    header_font = Font(bold=True, size=11, color='FFFFFF')
+    header_fill = PatternFill(start_color='1F3864', end_color='1F3864', fill_type='solid')
+    explanation_fill = PatternFill(start_color='FFF2CC', end_color='FFF2CC', fill_type='solid')
+    total_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+    number_format = '#,##0.00'
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+
+    row = start_row
+    ws.cell(row=row, column=1, value='Сводная таблица оплат по подразделениям').font = title_font
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=len(headers) + 3)
     row += 2
 
-    # ===== ТАБЛИЦА 3: Свод задолженности СИ УАТ =====
-    ws.cell(row=row, column=1, value='Свод задолженности СИ УАТ').font = title_font
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
-    row += 2
+    header_cells = ['Контрагент'] + headers + ['Итого', 'Пояснение']
+    for col, header in enumerate(header_cells, 1):
+        cell = ws.cell(row=row, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = thin_border
+    row += 1
 
-    summary_siuat_data = [
-        ('в т.ч. Судебная', summary_siuat.get('legal', 0)),
-        ('не подлежащая к взысканию', summary_siuat.get('notRecoverable', 0)),
-        ('подлежащая к взысканию', summary_siuat.get('recoverable', 0)),
-    ]
-
-    for label, value in summary_siuat_data:
-        cell_label = ws.cell(row=row, column=1, value=label)
-        cell_label.border = thin_border
-        cell_label.font = Font(bold=True)
-
-        cell_value = ws.cell(row=row, column=2, value=value)
-        cell_value.number_format = number_format
-        cell_value.border = thin_border
-        cell_value.alignment = Alignment(horizontal='right')
-        cell_value.font = Font(bold=True)
+    total_all = 0
+    for item in rows_data:
+        ws.cell(row=row, column=1, value=item['contractor']).border = thin_border
+        total_sum = 0
+        for col_idx, h in enumerate(headers, 2):
+            value = item.get(h, 0)
+            cell = ws.cell(row=row, column=col_idx, value=value)
+            cell.number_format = number_format
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal='right')
+            total_sum += value
+        total_all += total_sum
+        cell_total = ws.cell(row=row, column=len(headers) + 2, value=total_sum)
+        cell_total.number_format = number_format
+        cell_total.border = thin_border
+        cell_total.alignment = Alignment(horizontal='right')
+        cell_explanation = ws.cell(row=row, column=len(headers) + 3, value=item.get('explanation', ''))
+        cell_explanation.border = thin_border
+        if item.get('explanation'):
+            for col_idx in range(1, len(headers) + 4):
+                ws.cell(row=row, column=col_idx).fill = explanation_fill
         row += 1
 
-    print("Лист 'Сводные таблицы' создан")
+    ws.cell(row=row, column=1, value='ИТОГО').font = Font(bold=True, size=11)
+    ws.cell(row=row, column=1).fill = total_fill
+    ws.cell(row=row, column=1).border = thin_border
+
+    for col_idx, h in enumerate(headers, 2):
+        subtotal = sum(item.get(h, 0) for item in rows_data)
+        cell = ws.cell(row=row, column=col_idx, value=subtotal)
+        cell.number_format = number_format
+        cell.font = Font(bold=True, size=11)
+        cell.fill = total_fill
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal='right')
+
+    cell_grand_total = ws.cell(row=row, column=len(headers) + 2, value=total_all)
+    cell_grand_total.number_format = number_format
+    cell_grand_total.font = Font(bold=True, size=11)
+    cell_grand_total.fill = total_fill
+    cell_grand_total.border = thin_border
+    cell_grand_total.alignment = Alignment(horizontal='right')
+
+    ws.cell(row=row, column=len(headers) + 3).fill = total_fill
+    ws.cell(row=row, column=len(headers) + 3).border = thin_border
+
+    print(f"Сводная таблица '{title}' создана, строк: {row - start_row + 1}")
+
 
 if __name__ == '__main__':
     print("Сервер запущен. Для остановки нажми Ctrl+C\n")
