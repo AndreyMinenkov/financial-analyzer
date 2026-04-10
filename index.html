@@ -12,508 +12,651 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1><i class="fas fa-chart-line"></i> Финансовый аналитик</h1>
-            <p class="subtitle">Анализ поступлений и остатков на счетах</p>
-        </header>
-
-        <nav class="main-nav">
-            <button class="nav-btn active" data-page="upload">
-                <i class="fas fa-upload"></i> Загрузка выписок
-            </button>
-            <button class="nav-btn" data-page="receipts">
-                <i class="fas fa-arrow-down"></i> Поступления
-            </button>
-            <button class="nav-btn" data-page="balances">
-                <i class="fas fa-wallet"></i> Остатки
-            </button>
-            <button class="nav-btn" data-page="debt">
-                <i class="fas fa-file-invoice"></i> Дебиторка
-            </button>
-            <button class="nav-btn" data-page="suppliers">
-                <i class="fas fa-truck"></i> Оплаты поставщикам
-            </button>
-            <button class="nav-btn" data-page="library">
-                <i class="fas fa-address-book"></i> Библиотека
-            </button>
-        </nav>
-
-        <!-- Страница загрузки выписок -->
-        <div id="upload-page" class="page active">
-            <div class="page-header">
-                <h2><i class="fas fa-upload"></i> Загрузка банковских выписок</h2>
+    <div class="app-layout">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <i class="fas fa-chart-line"></i>
+                    <span class="sidebar-logo-text">ФинАналитик</span>
+                </div>
+                <button class="sidebar-toggle" id="sidebarToggle" title="Свернуть меню">
+                    <i class="fas fa-angles-left"></i>
+                </button>
             </div>
 
-            <div class="upload-section">
-                <div id="dropArea" class="drop-area">
-                    <i class="fas fa-cloud-upload-alt"></i>
-                    <p>Перетащите файлы выписок сюда</p>
-                    <button id="selectFilesBtn" class="btn btn-primary">Выберите файлы</button>
-                    <p class="file-info">Поддерживаются файлы .txt, .1c (формат 1С)</p>
-                </div>
+            <nav class="sidebar-nav">
+                <button class="sidebar-nav-btn active" data-page="upload">
+                    <i class="fas fa-upload"></i>
+                    <span class="sidebar-nav-text">Загрузка выписок</span>
+                </button>
+                <button class="sidebar-nav-btn" data-page="receipts">
+                    <i class="fas fa-arrow-down"></i>
+                    <span class="sidebar-nav-text">Поступления</span>
+                </button>
+                <button class="sidebar-nav-btn" data-page="balances">
+                    <i class="fas fa-wallet"></i>
+                    <span class="sidebar-nav-text">Остатки</span>
+                </button>
+                <button class="sidebar-nav-btn" data-page="debt">
+                    <i class="fas fa-file-invoice"></i>
+                    <span class="sidebar-nav-text">Дебиторка</span>
+                </button>
+                <button class="sidebar-nav-btn" data-page="suppliers">
+                    <i class="fas fa-truck"></i>
+                    <span class="sidebar-nav-text">Оплаты поставщикам</span>
+                </button>
+                <button class="sidebar-nav-btn" data-page="library">
+                    <i class="fas fa-address-book"></i>
+                    <span class="sidebar-nav-text">Библиотека</span>
+                </button>
+            </nav>
 
-                <div class="file-list" id="fileListSection" style="display: none;">
-                    <h3><i class="fas fa-file"></i> Загруженные файлы</h3>
-                    <div id="fileListContent" class="file-list-content">
-                        <p class="empty-message">Файлы не загружены</p>
-                    </div>
-
-                    <div class="upload-actions">
-                        <button id="processFilesBtn" class="btn btn-primary">
-                            <i class="fas fa-cogs"></i> Обработать файлы
-                        </button>
-                        <button id="clearFilesBtn" class="btn btn-secondary">
-                            <i class="fas fa-trash"></i> Очистить
-                        </button>
-                    </div>
+            <div class="sidebar-footer">
+                <div class="sidebar-footer-info">
+                    <i class="fas fa-circle-info"></i>
+                    <span class="sidebar-footer-text">v2.0</span>
                 </div>
             </div>
+        </aside>
 
-            <div class="stats-section" id="statsSection" style="display: none;">
-                <h3><i class="fas fa-chart-bar"></i> Статистика обработки</h3>
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-label">Файлов</div>
-                        <div class="stat-value" id="filesCount">0</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Операций</div>
-                        <div class="stat-value" id="operationsCount">0</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Счетов</div>
-                        <div class="stat-value" id="accountsCount">0</div>
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Top Header -->
+            <header class="top-header">
+                <div class="header-left">
+                    <button class="mobile-menu-btn" id="mobileMenuBtn">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <div class="breadcrumb">
+                        <span class="breadcrumb-item">Главная</span>
+                        <i class="fas fa-chevron-right breadcrumb-sep"></i>
+                        <span class="breadcrumb-current" id="breadcrumbCurrent">Загрузка выписок</span>
                     </div>
                 </div>
-            </div>
-        </div>
-
-        <!-- Страница поступлений -->
-        <div id="receipts-page" class="page">
-            <div class="page-header">
-                <h2><i class="fas fa-arrow-down"></i> Поступления денежных средств</h2>
-                <div class="header-actions">
-                    <button id="innUploadBtn" class="btn btn-secondary">
-                        <i class="fas fa-id-card"></i> Загрузить ИНН
-                    </button>
-                    <input type="file" id="innFileUpload" accept=".xlsx,.xls" style="display: none;">
-                    <button id="exportReceiptsBtn" class="btn btn-success">
-                        <i class="fas fa-file-excel"></i> Экспорт в Excel
-                    </button>
-                    <button id="refreshReceiptsBtn" class="btn btn-secondary">
-                        <i class="fas fa-sync-alt"></i> Обновить
-                    </button>
+                <div class="header-right">
+                    <div class="header-date" id="headerDate"></div>
                 </div>
-            </div>
+            </header>
 
-            <div class="search-section">
-                <div class="search-wrapper">
-                    <i class="fas fa-search search-icon"></i>
-                    <input type="text" id="searchReceipts" placeholder="Поиск по плательщику или назначению платежа...">
-                    <button id="clearSearchBtn" class="btn-clear">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>
-            </div>
+            <!-- Page Content -->
+            <div class="page-content">
 
-            <div class="summary-cards">
-                <div class="summary-card">
-                    <div class="summary-label">Всего поступлений</div>
-                    <div class="summary-value" id="totalReceiptsCount">0</div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-label">Общая сумма</div>
-                    <div class="summary-value" id="totalReceiptsAmount">0 ₽</div>
-                </div>
-            </div>
-
-            <div class="table-container">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Заказчик</th>
-                            <th>ИНН заказчика</th>
-                            <th>Юридическое лицо</th>
-                            <th>Счет получателя</th>
-                            <th>Сумма</th>
-                            <th>Банк получателя</th>
-                            <th>Назначение платежа</th>
-                            <th>Дата</th>
-                        </tr>
-                    </thead>
-                    <tbody id="receiptsTableBody">
-                        <tr class="empty-row">
-                            <td colspan="8">Загрузите выписки на странице "Загрузка выписок"</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Страница остатков -->
-        <div id="balances-page" class="page">
-            <div class="page-header">
-                <h2><i class="fas fa-wallet"></i> Остатки на счетах</h2>
-                <div class="header-actions">
-                    <button id="depositUploadBtn" class="btn btn-secondary">
-                        <i class="fas fa-coins"></i> Загрузить депозиты
-                    </button>
-                    <input type="file" id="depositFileUpload" accept=".txt,.xlsx,.xls" style="display: none;">
-                    <button id="exportBalancesBtn" class="btn btn-success">
-                        <i class="fas fa-file-excel"></i> Экспорт в Excel
-                    </button>
-                    <button id="calculateInterestsBtn" class="btn btn-primary">
-                        <i class="fas fa-calculator"></i> Рассчитать проценты
-                    </button>
-                </div>
-            </div>
-
-            <div class="date-selector">
-                <label for="calculationDate">Дата расчета:</label>
-                <input type="date" id="calculationDate">
-            </div>
-
-            <div class="summary-cards">
-                <div class="summary-card">
-                    <div class="summary-label">Количество счетов</div>
-                    <div class="summary-value" id="totalAccountsCount">0</div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-label">Остаток по выпискам</div>
-                    <div class="summary-value" id="totalBalanceAmount">0 ₽</div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-label">Начисленные проценты</div>
-                    <div class="summary-value" id="totalInterestsAmount">0 ₽</div>
-                </div>
-            </div>
-
-            <div class="table-container">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Компания</th>
-                            <th>Банк</th>
-                            <th>Счёт</th>
-                            <th>Остаток по выписке</th>
-                            <th>Вернувшийся депозит</th>
-                            <th>Ставка, %</th>
-                            <th>Начисленные проценты</th>
-                            <th>Реальный остаток</th>
-                            <th>Дата</th>
-                        </tr>
-                    </thead>
-                    <tbody id="balancesTableBody">
-                        <tr class="empty-row">
-                            <td colspan="9">Загрузите выписки на странице "Загрузка выписок"</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Страница сверки долгов -->
-        <div id="debt-page" class="page">
-            <div class="page-header">
-                <h2><i class="fas fa-file-invoice"></i> Сверка реестра долгов с поступлениями</h2>
-                <div class="header-actions">
-                    <button class="btn btn-secondary" id="summarySettingsBtn" title="Настройки сводных таблиц">
-                        <i class="fas fa-cog"></i> Настройки сводных
-                    </button>
-                    <button class="btn btn-primary" id="reconcileBtn" disabled>
-                        <i class="fas fa-sync-alt"></i> Выполнить сверку
-                    </button>
-                    <button class="btn btn-success" id="exportReconciledBtn" disabled>
-                        <i class="fas fa-file-excel"></i> Сохранить
-                    </button>
-                    <button class="btn btn-warning" id="saveCurrentDayBtn" disabled title="Сохранить данные текущего дня в localStorage для сравнения завтра">
-                        <i class="fas fa-save"></i> Сохранить данные дня
-                    </button>
-                    <button class="btn btn-secondary" id="clearReconciliationBtn">
-                        <i class="fas fa-trash"></i> Очистить
-                    </button>
-                    <button id="manageContractorsBtn" class="btn btn-secondary">
-                        <i class="fas fa-users-cog"></i> Контрагенты
-                    </button>
-                </div>
-            </div>
-
-            <div class="debt-reconciliation-section">
-                <div class="reconciliation-upload-grid">
-                    <!-- Файл 1: Реестр ДЗ -->
-                    <div class="upload-card">
-                        <h3><i class="fas fa-file-excel"></i> Реестр дебиторской задолженности</h3>
-                        <div class="file-drop-area" id="debtRegistryDropArea">
-                            <i class="fas fa-cloud-upload-alt"></i>
-                            <p>Перетащите файл реестра ДЗ или</p>
-                            <button class="btn btn-secondary" id="selectDebtRegistryBtn">Выберите файл</button>
-                            <input type="file" id="debtRegistryFile" accept=".xlsx,.xls" style="display: none;">
-                        </div>
-                        <div class="file-info" id="debtRegistryFileInfo">
-                            Файл не выбран
+                <!-- Страница загрузки выписок -->
+                <div id="upload-page" class="page active">
+                    <div class="page-header">
+                        <div>
+                            <h1><i class="fas fa-upload"></i> Загрузка банковских выписок</h1>
+                            <p class="page-description">Загрузите файлы выписок из банка в формате 1С для анализа операций</p>
                         </div>
                     </div>
 
-                    <!-- Файл 2: Поступления -->
-                    <div class="upload-card">
-                        <h3><i class="fas fa-file-excel"></i> Реестр поступлений с датами</h3>
-                        <div class="file-drop-area" id="receiptsRegistryDropArea">
-                            <i class="fas fa-cloud-upload-alt"></i>
-                            <p>Перетащите файл поступлений или</p>
-                            <button class="btn btn-secondary" id="selectReceiptsRegistryBtn">Выберите файл</button>
-                            <input type="file" id="receiptsRegistryFile" accept=".xlsx,.xls" style="display: none;">
+                    <div class="upload-section">
+                        <div id="dropArea" class="drop-area">
+                            <div class="drop-area-icon">
+                                <i class="fas fa-cloud-upload-alt"></i>
+                            </div>
+                            <p class="drop-area-title">Перетащите файлы выписок сюда</p>
+                            <p class="drop-area-subtitle">или</p>
+                            <button id="selectFilesBtn" class="btn btn-primary">Выберите файлы</button>
+                            <p class="file-info">Поддерживаются файлы .txt, .1c (формат 1С)</p>
                         </div>
-                        <div class="file-info" id="receiptsRegistryFileInfo">
-                            Файл не выбран
-                        </div>
-                    </div>
 
-                    <!-- Файл 3: Свод ДЗ СИ УАТ -->
-                    <div class="upload-card">
-                        <h3><i class="fas fa-file-excel"></i> Свод ДЗ СИ УАТ</h3>
-                        <div class="file-drop-area" id="siUatDropArea">
-                            <i class="fas fa-cloud-upload-alt"></i>
-                            <p>Перетащите файл СИ УАТ или</p>
-                            <button class="btn btn-secondary" id="selectSiUatBtn">Выберите файл</button>
-                            <input type="file" id="siUatFile" accept=".xlsx,.xls" style="display: none;">
-                        </div>
-                        <div class="file-info" id="siUatFileInfo">
-                            Файл не выбран
-                        </div>
-                    </div>
-                </div>
+                        <div class="file-list" id="fileListSection" style="display: none;">
+                            <div class="section-header">
+                                <h3><i class="fas fa-file"></i> Загруженные файлы</h3>
+                            </div>
+                            <div id="fileListContent" class="file-list-content">
+                                <p class="empty-message">Файлы не загружены</p>
+                            </div>
 
-                <!-- Индикатор данных предыдущего дня -->
-                <div class="previous-day-indicator" id="previousDayIndicator" style="display: none;">
-                    <i class="fas fa-info-circle"></i>
-                    <span id="previousDayIndicatorText">Данные за предыдущий день не заполнены</span>
-                </div>
-
-                <!-- Статистика сверки -->
-                <div class="reconciliation-stats" id="reconciliationStats" style="display: none;">
-                    <h3><i class="fas fa-chart-pie"></i> Результаты сверки</h3>
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-label">Всего документов в реестре</div>
-                            <div class="stat-value" id="statTotalDocuments">0</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Найдено в поступлениях</div>
-                            <div class="stat-value" id="statFoundDocuments">0</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Обновлено документов</div>
-                            <div class="stat-value" id="statUpdatedDocuments">0</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Записей с датами</div>
-                            <div class="stat-value" id="statReceiptsWithDates">0</div>
+                            <div class="upload-actions">
+                                <button id="processFilesBtn" class="btn btn-primary">
+                                    <i class="fas fa-cogs"></i> Обработать файлы
+                                </button>
+                                <button id="clearFilesBtn" class="btn btn-secondary">
+                                    <i class="fas fa-trash"></i> Очистить
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                <!-- Лог обработанных документов -->
-                <div class="reconciliation-log" id="reconciliationLog" style="display: none;">
-                    <h3><i class="fas fa-list"></i> Лог обработки</h3>
-                    <div class="log-container" id="logContainer">
-                        <!-- Динамически заполняется -->
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Страница оплат поставщикам -->
-        <div id="suppliers-page" class="page">
-            <div class="page-header">
-                <h2><i class="fas fa-truck"></i> Оплаты поставщикам</h2>
-                <div class="header-actions">
-                    <button id="uploadSuppliersBtn" class="btn btn-primary">
-                        <i class="fas fa-file-excel"></i> Загрузить файл Excel
-                    </button>
-                    <input type="file" id="suppliersFileUpload" accept=".xlsx,.xls" style="display: none;">
-                    <button id="goToLibraryBtn" class="btn btn-secondary">
-                        <i class="fas fa-address-book"></i> Библиотека контрагентов
-                    </button>
-                </div>
-            </div>
-
-            <!-- Статистика -->
-            <div class="summary-cards" id="suppliersStats" style="display: none;">
-                <div class="summary-card">
-                    <div class="summary-label">Загружено реестров</div>
-                    <div class="summary-value" id="suppliersRegistriesCount">0</div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-label">Контрагентов в библиотеке</div>
-                    <div class="summary-value" id="suppliersContractorsCount">0</div>
-                </div>
-            </div>
-
-            <!-- Реестры и сводные таблицы -->
-            <div id="suppliersContent">
-                <div class="card" style="text-align: center; padding: 48px;">
-                    <i class="fas fa-cloud-upload-alt" style="font-size: 48px; color: var(--text-tertiary); margin-bottom: 16px;"></i>
-                    <p style="color: var(--text-secondary); font-size: 15px;">Загрузите Excel-файл с реестрами заявок для формирования сводных таблиц</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Страница библиотеки контрагентов -->
-        <div id="library-page" class="page">
-            <div class="page-header">
-                <h2><i class="fas fa-address-book"></i> Библиотека контрагентов</h2>
-                <div class="header-actions">
-                    <button id="libAddBtn" class="btn btn-sm btn-primary">
-                        <i class="fas fa-plus"></i> Добавить
-                    </button>
-                    <button id="libImportBtn" class="btn btn-sm btn-secondary">
-                        <i class="fas fa-file-import"></i> Импорт
-                    </button>
-                    <input type="file" id="libraryImportFile" accept=".xlsx,.xls" style="display: none;">
-                    <button id="libExportBtn" class="btn btn-sm btn-success">
-                        <i class="fas fa-file-export"></i> Экспорт
-                    </button>
-                    <button id="libClearBtn" class="btn btn-sm btn-danger">
-                        <i class="fas fa-trash"></i> Очистить
-                    </button>
-                </div>
-            </div>
-
-            <!-- Поиск -->
-            <div class="search-section">
-                <div class="search-wrapper">
-                    <i class="fas fa-search search-icon"></i>
-                    <input type="text" id="librarySearch" placeholder="Поиск по наименованию, организации или пояснению...">
-                    <button id="libClearSearchBtn" class="btn-clear">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>
-            </div>
-
-            <!-- Статистика -->
-            <div class="library-stats" id="libraryStats">
-                <div class="stat-badge">
-                    <span class="stat-badge-label">Всего:</span>
-                    <span class="stat-badge-value" id="libTotal">0</span>
-                </div>
-                <div class="stat-badge">
-                    <span class="stat-badge-label">С пояснением:</span>
-                    <span class="stat-badge-value" id="libWithExplanation">0</span>
-                </div>
-            </div>
-
-            <!-- Подсказка -->
-            <p class="section-description" style="margin-bottom: 16px; font-size: 12px; color: var(--text-tertiary);">
-                <i class="fas fa-info-circle"></i> 
-                Формат импорта: <strong>Получатель</strong>, <strong>Пояснения</strong>, <strong>Юридическое Лицо</strong>
-            </p>
-
-            <!-- Таблица -->
-            <div class="table-container">
-                <table class="data-table library-table">
-                    <thead>
-                        <tr>
-                            <th style="width: 35%;">
-                                <div class="th-content">
-                                    <span class="th-text">Получатель</span>
-                                    <button class="filter-btn" data-filter="name" title="Фильтр">
-                                        <i class="fas fa-filter"></i>
-                                    </button>
+                    <div class="stats-section" id="statsSection" style="display: none;">
+                        <h3><i class="fas fa-chart-bar"></i> Статистика обработки</h3>
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-icon stat-icon-blue">
+                                    <i class="fas fa-file-alt"></i>
                                 </div>
-                            </th>
-                            <th style="width: 25%;">
-                                <div class="th-content">
-                                    <span class="th-text">Юридическое Лицо</span>
-                                    <button class="filter-btn" data-filter="organization" title="Фильтр">
-                                        <i class="fas fa-filter"></i>
-                                    </button>
+                                <div class="stat-label">Файлов</div>
+                                <div class="stat-value" id="filesCount">0</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon stat-icon-green">
+                                    <i class="fas fa-exchange-alt"></i>
                                 </div>
-                            </th>
-                            <th style="width: 32%;">
-                                <div class="th-content">
-                                    <span class="th-text">Пояснения</span>
-                                    <button class="filter-btn" data-filter="explanation" title="Фильтр">
-                                        <i class="fas fa-filter"></i>
-                                    </button>
+                                <div class="stat-label">Операций</div>
+                                <div class="stat-value" id="operationsCount">0</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon stat-icon-purple">
+                                    <i class="fas fa-credit-card"></i>
                                 </div>
-                            </th>
-                            <th style="width: 8%; text-align: center;">Действия</th>
-                        </tr>
-                    </thead>
-                    <tbody id="libraryTableBody">
-                        <tr class="empty-row">
-                            <td colspan="4">Библиотека пуста</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
+                                <div class="stat-label">Счетов</div>
+                                <div class="stat-value" id="accountsCount">0</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-            <!-- Выпадающие фильтры -->
-            <div id="filterDropdowns" class="filter-dropdowns" style="display: none;">
-                <div id="filterName" class="filter-dropdown" style="display: none;">
-                    <div class="filter-header">
-                        <span>Получатель</span>
-                        <button class="filter-close" data-filter="name">&times;</button>
+                <!-- Страница поступлений -->
+                <div id="receipts-page" class="page">
+                    <div class="page-header">
+                        <div>
+                            <h1><i class="fas fa-arrow-down"></i> Поступления денежных средств</h1>
+                            <p class="page-description">Просмотр и анализ всех входящих платежей</p>
+                        </div>
+                        <div class="header-actions">
+                            <button id="innUploadBtn" class="btn btn-secondary">
+                                <i class="fas fa-id-card"></i> Загрузить ИНН
+                            </button>
+                            <input type="file" id="innFileUpload" accept=".xlsx,.xls" style="display: none;">
+                            <button id="exportReceiptsBtn" class="btn btn-success">
+                                <i class="fas fa-file-excel"></i> Экспорт в Excel
+                            </button>
+                            <button id="refreshReceiptsBtn" class="btn btn-secondary">
+                                <i class="fas fa-sync-alt"></i> Обновить
+                            </button>
+                        </div>
                     </div>
-                    <div class="filter-search">
-                        <input type="text" placeholder="Поиск..." data-filter-search="name">
+
+                    <div class="search-section">
+                        <div class="search-wrapper">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" id="searchReceipts" placeholder="Поиск по плательщику или назначению платежа...">
+                            <button id="clearSearchBtn" class="btn-clear">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
                     </div>
-                    <div class="filter-select-all">
-                        <label class="filter-option select-all">
-                            <input type="checkbox" id="selectAllName" class="select-all-cb" data-filter-select="name">
-                            <span class="filter-option-label"><strong>Выбрать все</strong></span>
-                        </label>
+
+                    <div class="summary-cards">
+                        <div class="summary-card">
+                            <div class="summary-icon summary-icon-blue">
+                                <i class="fas fa-receipt"></i>
+                            </div>
+                            <div class="summary-info">
+                                <div class="summary-label">Всего поступлений</div>
+                                <div class="summary-value" id="totalReceiptsCount">0</div>
+                            </div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="summary-icon summary-icon-green">
+                                <i class="fas fa-ruble-sign"></i>
+                            </div>
+                            <div class="summary-info">
+                                <div class="summary-label">Общая сумма</div>
+                                <div class="summary-value" id="totalReceiptsAmount">0 ₽</div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="filter-options" id="filterOptionsName"></div>
-                    <div class="filter-actions">
-                        <button class="btn btn-sm btn-primary" data-filter-apply="name">Применить</button>
-                        <button class="btn btn-sm btn-secondary" data-filter-clear="name">Сбросить</button>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Заказчик</th>
+                                    <th>ИНН заказчика</th>
+                                    <th>Юридическое лицо</th>
+                                    <th>Счет получателя</th>
+                                    <th>Сумма</th>
+                                    <th>Банк получателя</th>
+                                    <th>Назначение платежа</th>
+                                    <th>Дата</th>
+                                </tr>
+                            </thead>
+                            <tbody id="receiptsTableBody">
+                                <tr class="empty-row">
+                                    <td colspan="8">Загрузите выписки на странице "Загрузка выписок"</td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
-                <div id="filterOrganization" class="filter-dropdown" style="display: none;">
-                    <div class="filter-header">
-                        <span>Юридическое Лицо</span>
-                        <button class="filter-close" data-filter="organization">&times;</button>
+
+                <!-- Страница остатков -->
+                <div id="balances-page" class="page">
+                    <div class="page-header">
+                        <div>
+                            <h1><i class="fas fa-wallet"></i> Остатки на счетах</h1>
+                            <p class="page-description">Мониторинг остатков и расчёт процентов по депозитам</p>
+                        </div>
+                        <div class="header-actions">
+                            <button id="depositUploadBtn" class="btn btn-secondary">
+                                <i class="fas fa-coins"></i> Загрузить депозиты
+                            </button>
+                            <input type="file" id="depositFileUpload" accept=".txt,.xlsx,.xls" style="display: none;">
+                            <button id="exportBalancesBtn" class="btn btn-success">
+                                <i class="fas fa-file-excel"></i> Экспорт в Excel
+                            </button>
+                            <button id="calculateInterestsBtn" class="btn btn-primary">
+                                <i class="fas fa-calculator"></i> Рассчитать проценты
+                            </button>
+                        </div>
                     </div>
-                    <div class="filter-search">
-                        <input type="text" placeholder="Поиск..." data-filter-search="organization">
+
+                    <div class="date-selector">
+                        <label for="calculationDate">Дата расчета:</label>
+                        <input type="date" id="calculationDate">
                     </div>
-                    <div class="filter-select-all">
-                        <label class="filter-option select-all">
-                            <input type="checkbox" id="selectAllOrganization" class="select-all-cb" data-filter-select="organization">
-                            <span class="filter-option-label"><strong>Выбрать все</strong></span>
-                        </label>
+
+                    <div class="summary-cards">
+                        <div class="summary-card">
+                            <div class="summary-icon summary-icon-blue">
+                                <i class="fas fa-credit-card"></i>
+                            </div>
+                            <div class="summary-info">
+                                <div class="summary-label">Количество счетов</div>
+                                <div class="summary-value" id="totalAccountsCount">0</div>
+                            </div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="summary-icon summary-icon-green">
+                                <i class="fas fa-wallet"></i>
+                            </div>
+                            <div class="summary-info">
+                                <div class="summary-label">Остаток по выпискам</div>
+                                <div class="summary-value" id="totalBalanceAmount">0 ₽</div>
+                            </div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="summary-icon summary-icon-orange">
+                                <i class="fas fa-percentage"></i>
+                            </div>
+                            <div class="summary-info">
+                                <div class="summary-label">Начисленные проценты</div>
+                                <div class="summary-value" id="totalInterestsAmount">0 ₽</div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="filter-options" id="filterOptionsOrganization"></div>
-                    <div class="filter-actions">
-                        <button class="btn btn-sm btn-primary" data-filter-apply="organization">Применить</button>
-                        <button class="btn btn-sm btn-secondary" data-filter-clear="organization">Сбросить</button>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Компания</th>
+                                    <th>Банк</th>
+                                    <th>Счёт</th>
+                                    <th>Остаток по выписке</th>
+                                    <th>Вернувшийся депозит</th>
+                                    <th>Ставка, %</th>
+                                    <th>Начисленные проценты</th>
+                                    <th>Реальный остаток</th>
+                                    <th>Дата</th>
+                                </tr>
+                            </thead>
+                            <tbody id="balancesTableBody">
+                                <tr class="empty-row">
+                                    <td colspan="9">Загрузите выписки на странице "Загрузка выписок"</td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
-                <div id="filterExplanation" class="filter-dropdown" style="display: none;">
-                    <div class="filter-header">
-                        <span>Пояснения</span>
-                        <button class="filter-close" data-filter="explanation">&times;</button>
+
+                <!-- Страница сверки долгов -->
+                <div id="debt-page" class="page">
+                    <div class="page-header">
+                        <div>
+                            <h1><i class="fas fa-file-invoice"></i> Сверка реестра долгов с поступлениями</h1>
+                            <p class="page-description">Автоматическая сверка дебиторской задолженности с фактическими поступлениями</p>
+                        </div>
+                        <div class="header-actions">
+                            <button class="btn btn-secondary" id="summarySettingsBtn" title="Настройки сводных таблиц">
+                                <i class="fas fa-cog"></i> Настройки сводных
+                            </button>
+                            <button class="btn btn-primary" id="reconcileBtn" disabled>
+                                <i class="fas fa-sync-alt"></i> Выполнить сверку
+                            </button>
+                            <button class="btn btn-success" id="exportReconciledBtn" disabled>
+                                <i class="fas fa-file-excel"></i> Сохранить
+                            </button>
+                            <button class="btn btn-warning" id="saveCurrentDayBtn" disabled title="Сохранить данные текущего дня в localStorage для сравнения завтра">
+                                <i class="fas fa-save"></i> Сохранить данные дня
+                            </button>
+                            <button class="btn btn-secondary" id="clearReconciliationBtn">
+                                <i class="fas fa-trash"></i> Очистить
+                            </button>
+                            <button id="manageContractorsBtn" class="btn btn-secondary">
+                                <i class="fas fa-users-cog"></i> Контрагенты
+                            </button>
+                        </div>
                     </div>
-                    <div class="filter-search">
-                        <input type="text" placeholder="Поиск..." data-filter-search="explanation">
-                    </div>
-                    <div class="filter-select-all">
-                        <label class="filter-option select-all">
-                            <input type="checkbox" id="selectAllExplanation" class="select-all-cb" data-filter-select="explanation">
-                            <span class="filter-option-label"><strong>Выбрать все</strong></span>
-                        </label>
-                    </div>
-                    <div class="filter-options" id="filterOptionsExplanation"></div>
-                    <div class="filter-actions">
-                        <button class="btn btn-sm btn-primary" data-filter-apply="explanation">Применить</button>
-                        <button class="btn btn-sm btn-secondary" data-filter-clear="explanation">Сбросить</button>
+
+                    <div class="debt-reconciliation-section">
+                        <div class="reconciliation-upload-grid">
+                            <!-- Файл 1: Реестр ДЗ -->
+                            <div class="upload-card">
+                                <div class="upload-card-header">
+                                    <div class="upload-card-icon upload-card-icon-blue">
+                                        <i class="fas fa-file-excel"></i>
+                                    </div>
+                                    <h3>Реестр дебиторской задолженности</h3>
+                                </div>
+                                <div class="file-drop-area" id="debtRegistryDropArea">
+                                    <i class="fas fa-cloud-upload-alt"></i>
+                                    <p>Перетащите файл реестра ДЗ или</p>
+                                    <button class="btn btn-secondary" id="selectDebtRegistryBtn">Выберите файл</button>
+                                    <input type="file" id="debtRegistryFile" accept=".xlsx,.xls" style="display: none;">
+                                </div>
+                                <div class="file-info" id="debtRegistryFileInfo">
+                                    <i class="fas fa-info-circle"></i> Файл не выбран
+                                </div>
+                            </div>
+
+                            <!-- Файл 2: Поступления -->
+                            <div class="upload-card">
+                                <div class="upload-card-header">
+                                    <div class="upload-card-icon upload-card-icon-green">
+                                        <i class="fas fa-file-excel"></i>
+                                    </div>
+                                    <h3>Реестр поступлений с датами</h3>
+                                </div>
+                                <div class="file-drop-area" id="receiptsRegistryDropArea">
+                                    <i class="fas fa-cloud-upload-alt"></i>
+                                    <p>Перетащите файл поступлений или</p>
+                                    <button class="btn btn-secondary" id="selectReceiptsRegistryBtn">Выберите файл</button>
+                                    <input type="file" id="receiptsRegistryFile" accept=".xlsx,.xls" style="display: none;">
+                                </div>
+                                <div class="file-info" id="receiptsRegistryFileInfo">
+                                    <i class="fas fa-info-circle"></i> Файл не выбран
+                                </div>
+                            </div>
+
+                            <!-- Файл 3: Свод ДЗ СИ УАТ -->
+                            <div class="upload-card">
+                                <div class="upload-card-header">
+                                    <div class="upload-card-icon upload-card-icon-purple">
+                                        <i class="fas fa-file-excel"></i>
+                                    </div>
+                                    <h3>Свод ДЗ СИ УАТ</h3>
+                                </div>
+                                <div class="file-drop-area" id="siUatDropArea">
+                                    <i class="fas fa-cloud-upload-alt"></i>
+                                    <p>Перетащите файл СИ УАТ или</p>
+                                    <button class="btn btn-secondary" id="selectSiUatBtn">Выберите файл</button>
+                                    <input type="file" id="siUatFile" accept=".xlsx,.xls" style="display: none;">
+                                </div>
+                                <div class="file-info" id="siUatFileInfo">
+                                    <i class="fas fa-info-circle"></i> Файл не выбран
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Индикатор данных предыдущего дня -->
+                        <div class="previous-day-indicator" id="previousDayIndicator" style="display: none;">
+                            <i class="fas fa-info-circle"></i>
+                            <span id="previousDayIndicatorText">Данные за предыдущий день не заполнены</span>
+                        </div>
+
+                        <!-- Статистика сверки -->
+                        <div class="reconciliation-stats" id="reconciliationStats" style="display: none;">
+                            <h3><i class="fas fa-chart-pie"></i> Результаты сверки</h3>
+                            <div class="stats-grid">
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-blue">
+                                        <i class="fas fa-file-alt"></i>
+                                    </div>
+                                    <div class="stat-label">Всего документов в реестре</div>
+                                    <div class="stat-value" id="statTotalDocuments">0</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-green">
+                                        <i class="fas fa-check-circle"></i>
+                                    </div>
+                                    <div class="stat-label">Найдено в поступлениях</div>
+                                    <div class="stat-value" id="statFoundDocuments">0</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-orange">
+                                        <i class="fas fa-sync-alt"></i>
+                                    </div>
+                                    <div class="stat-label">Обновлено документов</div>
+                                    <div class="stat-value" id="statUpdatedDocuments">0</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-purple">
+                                        <i class="fas fa-calendar-check"></i>
+                                    </div>
+                                    <div class="stat-label">Записей с датами</div>
+                                    <div class="stat-value" id="statReceiptsWithDates">0</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Лог обработанных документов -->
+                        <div class="reconciliation-log" id="reconciliationLog" style="display: none;">
+                            <h3><i class="fas fa-list"></i> Лог обработки</h3>
+                            <div class="log-container" id="logContainer">
+                                <!-- Динамически заполняется -->
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </div>
-    </div> <!-- /.container -->
+
+                <!-- Страница оплат поставщикам -->
+                <div id="suppliers-page" class="page">
+                    <div class="page-header">
+                        <div>
+                            <h1><i class="fas fa-truck"></i> Оплаты поставщикам</h1>
+                            <p class="page-description">Сводные таблицы по оплатам контрагентам</p>
+                        </div>
+                        <div class="header-actions">
+                            <button id="uploadSuppliersBtn" class="btn btn-primary">
+                                <i class="fas fa-file-excel"></i> Загрузить файл Excel
+                            </button>
+                            <input type="file" id="suppliersFileUpload" accept=".xlsx,.xls" style="display: none;">
+                            <button id="goToLibraryBtn" class="btn btn-secondary">
+                                <i class="fas fa-address-book"></i> Библиотека контрагентов
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Статистика -->
+                    <div class="summary-cards" id="suppliersStats" style="display: none;">
+                        <div class="summary-card">
+                            <div class="summary-icon summary-icon-blue">
+                                <i class="fas fa-file-invoice"></i>
+                            </div>
+                            <div class="summary-info">
+                                <div class="summary-label">Загружено реестров</div>
+                                <div class="summary-value" id="suppliersRegistriesCount">0</div>
+                            </div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="summary-icon summary-icon-green">
+                                <i class="fas fa-users"></i>
+                            </div>
+                            <div class="summary-info">
+                                <div class="summary-label">Контрагентов в библиотеке</div>
+                                <div class="summary-value" id="suppliersContractorsCount">0</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Реестры и сводные таблицы -->
+                    <div id="suppliersContent">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">
+                                <i class="fas fa-cloud-upload-alt"></i>
+                            </div>
+                            <h3 class="empty-state-title">Загрузите Excel-файл с реестрами</h3>
+                            <p class="empty-state-description">Загрузите Excel-файл с реестрами заявок для формирования сводных таблиц</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Страница библиотеки контрагентов -->
+                <div id="library-page" class="page">
+                    <div class="page-header">
+                        <div>
+                            <h1><i class="fas fa-address-book"></i> Библиотека контрагентов</h1>
+                            <p class="page-description">Управление списком контрагентов и пояснениями к платежам</p>
+                        </div>
+                        <div class="header-actions">
+                            <button id="libAddBtn" class="btn btn-sm btn-primary">
+                                <i class="fas fa-plus"></i> Добавить
+                            </button>
+                            <button id="libImportBtn" class="btn btn-sm btn-secondary">
+                                <i class="fas fa-file-import"></i> Импорт
+                            </button>
+                            <input type="file" id="libraryImportFile" accept=".xlsx,.xls" style="display: none;">
+                            <button id="libExportBtn" class="btn btn-sm btn-success">
+                                <i class="fas fa-file-export"></i> Экспорт
+                            </button>
+                            <button id="libClearBtn" class="btn btn-sm btn-danger">
+                                <i class="fas fa-trash"></i> Очистить
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Поиск -->
+                    <div class="search-section">
+                        <div class="search-wrapper">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" id="librarySearch" placeholder="Поиск по наименованию, организации или пояснению...">
+                            <button id="libClearSearchBtn" class="btn-clear">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Статистика -->
+                    <div class="library-stats" id="libraryStats">
+                        <div class="stat-badge">
+                            <span class="stat-badge-label">Всего:</span>
+                            <span class="stat-badge-value" id="libTotal">0</span>
+                        </div>
+                        <div class="stat-badge">
+                            <span class="stat-badge-label">С пояснением:</span>
+                            <span class="stat-badge-value" id="libWithExplanation">0</span>
+                        </div>
+                    </div>
+
+                    <!-- Подсказка -->
+                    <p class="section-description" style="margin-bottom: 16px; font-size: 12px; color: var(--text-tertiary);">
+                        <i class="fas fa-info-circle"></i>
+                        Формат импорта: <strong>Получатель</strong>, <strong>Пояснения</strong>, <strong>Юридическое Лицо</strong>
+                    </p>
+
+                    <!-- Таблица -->
+                    <div class="table-container">
+                        <table class="data-table library-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 35%;">
+                                        <div class="th-content">
+                                            <span class="th-text">Получатель</span>
+                                            <button class="filter-btn" data-filter="name" title="Фильтр">
+                                                <i class="fas fa-filter"></i>
+                                            </button>
+                                        </div>
+                                    </th>
+                                    <th style="width: 25%;">
+                                        <div class="th-content">
+                                            <span class="th-text">Юридическое Лицо</span>
+                                            <button class="filter-btn" data-filter="organization" title="Фильтр">
+                                                <i class="fas fa-filter"></i>
+                                            </button>
+                                        </div>
+                                    </th>
+                                    <th style="width: 32%;">
+                                        <div class="th-content">
+                                            <span class="th-text">Пояснения</span>
+                                            <button class="filter-btn" data-filter="explanation" title="Фильтр">
+                                                <i class="fas fa-filter"></i>
+                                            </button>
+                                        </div>
+                                    </th>
+                                    <th style="width: 8%; text-align: center;">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="libraryTableBody">
+                                <tr class="empty-row">
+                                    <td colspan="4">Библиотека пуста</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Выпадающие фильтры -->
+                    <div id="filterDropdowns" class="filter-dropdowns" style="display: none;">
+                        <div id="filterName" class="filter-dropdown" style="display: none;">
+                            <div class="filter-header">
+                                <span>Получатель</span>
+                                <button class="filter-close" data-filter="name">&times;</button>
+                            </div>
+                            <div class="filter-search">
+                                <input type="text" placeholder="Поиск..." data-filter-search="name">
+                            </div>
+                            <div class="filter-select-all">
+                                <label class="filter-option select-all">
+                                    <input type="checkbox" id="selectAllName" class="select-all-cb" data-filter-select="name">
+                                    <span class="filter-option-label"><strong>Выбрать все</strong></span>
+                                </label>
+                            </div>
+                            <div class="filter-options" id="filterOptionsName"></div>
+                            <div class="filter-actions">
+                                <button class="btn btn-sm btn-primary" data-filter-apply="name">Применить</button>
+                                <button class="btn btn-sm btn-secondary" data-filter-clear="name">Сбросить</button>
+                            </div>
+                        </div>
+                        <div id="filterOrganization" class="filter-dropdown" style="display: none;">
+                            <div class="filter-header">
+                                <span>Юридическое Лицо</span>
+                                <button class="filter-close" data-filter="organization">&times;</button>
+                            </div>
+                            <div class="filter-search">
+                                <input type="text" placeholder="Поиск..." data-filter-search="organization">
+                            </div>
+                            <div class="filter-select-all">
+                                <label class="filter-option select-all">
+                                    <input type="checkbox" id="selectAllOrganization" class="select-all-cb" data-filter-select="organization">
+                                    <span class="filter-option-label"><strong>Выбрать все</strong></span>
+                                </label>
+                            </div>
+                            <div class="filter-options" id="filterOptionsOrganization"></div>
+                            <div class="filter-actions">
+                                <button class="btn btn-sm btn-primary" data-filter-apply="organization">Применить</button>
+                                <button class="btn btn-sm btn-secondary" data-filter-clear="organization">Сбросить</button>
+                            </div>
+                        </div>
+                        <div id="filterExplanation" class="filter-dropdown" style="display: none;">
+                            <div class="filter-header">
+                                <span>Пояснения</span>
+                                <button class="filter-close" data-filter="explanation">&times;</button>
+                            </div>
+                            <div class="filter-search">
+                                <input type="text" placeholder="Поиск..." data-filter-search="explanation">
+                            </div>
+                            <div class="filter-select-all">
+                                <label class="filter-option select-all">
+                                    <input type="checkbox" id="selectAllExplanation" class="select-all-cb" data-filter-select="explanation">
+                                    <span class="filter-option-label"><strong>Выбрать все</strong></span>
+                                </label>
+                            </div>
+                            <div class="filter-options" id="filterOptionsExplanation"></div>
+                            <div class="filter-actions">
+                                <button class="btn btn-sm btn-primary" data-filter-apply="explanation">Применить</button>
+                                <button class="btn btn-sm btn-secondary" data-filter-clear="explanation">Сбросить</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div> <!-- /.page-content -->
+        </main>
+    </div> <!-- /.app-layout -->
 
     <!-- Модальное окно для редактирования депозитов -->
     <div id="depositModal" class="modal">
@@ -661,37 +804,12 @@
 
                 <!-- Секция: Данные предыдущего дня -->
                 <h4 style="margin-bottom: 4px; font-size: 14px; font-weight: 600; color: var(--text-primary);">
-                    <i class="fas fa-calendar-alt" style="color: var(--primary);"></i> Данные предыдущего дня
+                    <i class="fas fa-calendar-alt" style="color: var(--primary);"></i> Данные предыдущего дня по подразделениям
                 </h4>
                 <p style="font-size: 11px; color: var(--text-tertiary); margin-bottom: 10px;">
-                    Загрузите Excel-файл с двумя колонками: <strong>Подразделение</strong> и <strong>Сумма ПДЗ</strong>. Данные сохранятся для расчёта динамики.
+                    Для расчёта динамики. Вводятся 1 раз, далее обновляются автоматически.
                 </p>
-
-                <!-- Зона загрузки файла -->
-                <div id="previousDayFileUploadArea" style="border: 2px dashed var(--border-light); border-radius: var(--radius-sm); padding: 16px; text-align: center; margin-bottom: 12px; cursor: pointer; transition: background 0.2s;">
-                    <input type="file" id="previousDayFileInput" accept=".xlsx,.xls" style="display: none;">
-                    <i class="fas fa-file-excel" style="font-size: 24px; color: var(--secondary); margin-bottom: 8px; display: block;"></i>
-                    <span style="font-size: 13px; color: var(--text-secondary);">Нажмите или перетащите файл сюда</span>
-                    <br>
-                    <span style="font-size: 11px; color: var(--text-tertiary);">.xlsx, .xls — колонки: Подразделение, Сумма ПДЗ</span>
-                </div>
-
-                <!-- Статус загруженного файла -->
-                <div id="previousDayFileStatus" style="display: none; margin-bottom: 12px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--bg-tertiary); border-radius: var(--radius-sm); border: 1px solid var(--border-light);">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <i class="fas fa-check-circle" style="color: var(--success);"></i>
-                            <span id="previousDayFileName" style="font-size: 13px; font-weight: 500;"></span>
-                            <span id="previousDayRowCount" style="font-size: 11px; color: var(--text-tertiary);"></span>
-                        </div>
-                        <button id="clearPreviousDayBtn" class="btn btn-sm btn-danger" title="Удалить данные" style="padding: 4px 10px; font-size: 11px;">
-                            <i class="fas fa-trash"></i> Очистить
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Таблица загруженных данных (только для чтения) -->
-                <div id="previousDayDataContainer" style="display: none; max-height: 200px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: var(--radius-sm);">
+                <div style="max-height: 200px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: var(--radius-sm);">
                     <table class="data-table" style="min-width: auto;">
                         <thead>
                             <tr>
@@ -700,6 +818,9 @@
                             </tr>
                         </thead>
                         <tbody id="previousDayDataBody">
+                            <tr class="empty-row">
+                                <td colspan="2">Сначала выполните сверку</td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -711,13 +832,13 @@
         </div>
     </div>
 
-    <script src="storage.js?v=2"></script>
-    <script src="parser.js?v=2"></script>
-    <script src="receipts-manager.js?v=2"></script>
-    <script src="balances-manager.js?v=2"></script>
-    <script src="debt-reconciliation.js?v=2"></script>
-    <script src="contractors-library.js?v=2"></script>
-    <script src="supplier-payments.js?v=2"></script>
-    <script src="app.js?v=2"></script>
+    <script src="storage.js"></script>
+    <script src="parser.js"></script>
+    <script src="receipts-manager.js"></script>
+    <script src="balances-manager.js"></script>
+    <script src="debt-reconciliation.js"></script>
+    <script src="contractors-library.js"></script>
+    <script src="supplier-payments.js"></script>
+    <script src="app.js"></script>
 </body>
 </html>

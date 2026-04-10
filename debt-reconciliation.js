@@ -125,125 +125,7 @@ class DebtReconciliationManager {
         }
     }
 
-    // Загрузить файл предыдущего дня (Excel с колонками: Подразделение, Сумма ПДЗ)
-    async loadPreviousDayFile(file) {
-        console.log('Загрузка файла данных предыдущего дня:', file.name);
-        try {
-            const arrayBuffer = await this.readFileAsArrayBuffer(file);
-
-            const workbook = XLSX.read(arrayBuffer, {
-                type: 'array',
-                cellDates: true,
-                raw: true
-            });
-
-            const sheetName = workbook.SheetNames[0];
-            const worksheet = workbook.Sheets[sheetName];
-
-            const rows = XLSX.utils.sheet_to_json(worksheet, {
-                header: 1,
-                defval: null,
-                raw: true
-            });
-
-            if (rows.length < 2) {
-                return {
-                    success: false,
-                    message: 'Файл не содержит данных (минимум 1 строка данных + заголовок)'
-                };
-            }
-
-            const headers = rows[0] || [];
-
-            // Ищем колонку подразделения (первая колонка — "Подразделение" или просто A)
-            let filialCol = 0; // по умолчанию первая
-            const filialSearch = ['подразделение', 'филиал', 'дт', 'branch'];
-            for (let i = 0; i < headers.length; i++) {
-                if (headers[i]) {
-                    const h = String(headers[i]).toLowerCase();
-                    if (filialSearch.some(s => h.includes(s))) {
-                        filialCol = i;
-                        break;
-                    }
-                }
-            }
-
-            // Ищем колонку суммы (вторая колонка — "Сумма ПДЗ" или просто B)
-            let amountCol = 1; // по умолчанию вторая
-            const amountSearch = ['сумма', 'пдз', 'amount', 'зад', 'просроч'];
-            for (let i = 0; i < headers.length; i++) {
-                if (headers[i]) {
-                    const h = String(headers[i]).toLowerCase();
-                    if (amountSearch.some(s => h.includes(s))) {
-                        amountCol = i;
-                        break;
-                    }
-                }
-            }
-
-            console.log('Найдены колонки: подразделение=' + (filialCol + 1) + ', сумма=' + (amountCol + 1));
-
-            // Парсим данные
-            const previousDayData = {};
-            let rowCount = 0;
-
-            for (let i = 1; i < rows.length; i++) {
-                const row = rows[i];
-                if (!row || row.length === 0) continue;
-
-                const filial = row[filialCol];
-                if (!filial || String(filial).trim() === '') continue;
-
-                const filialName = String(filial).trim();
-                const amount = this.parseExcelNumber(row[amountCol] || 0);
-
-                previousDayData[filialName] = amount;
-                rowCount++;
-            }
-
-            if (rowCount === 0) {
-                return {
-                    success: false,
-                    message: 'Не найдено ни одной записи с подразделением'
-                };
-            }
-
-            // Сохраняем в localStorage
-            localStorage.setItem('previousDayDebt_manual', JSON.stringify(previousDayData));
-            console.log(`Загружено ${rowCount} подразделений из файла предыдущего дня`);
-
-            return {
-                success: true,
-                message: `Загружено ${rowCount} подразделений из файла "${file.name}"`,
-                data: previousDayData,
-                rowCount: rowCount,
-                fileName: file.name
-            };
-        } catch (error) {
-            console.error('Ошибка загрузки файла предыдущего дня:', error);
-            return {
-                success: false,
-                message: 'Ошибка загрузки файла: ' + error.message
-            };
-        }
-    }
-
-    // Очистить данные предыдущего дня
-    clearPreviousDayData() {
-        try {
-            localStorage.removeItem('previousDayDebt_manual');
-            console.log('Данные предыдущего дня удалены');
-            return { success: true, message: 'Данные предыдущего дня удалены' };
-        } catch (e) {
-            console.error('Ошибка удаления данных предыдущего дня:', e);
-            return { success: false, message: 'Ошибка: ' + e.message };
-        }
-    }
-
     // Собрать данные по филиалам из debtData (только из колонки OVERDUE)
-    // Примечание: для таблицы динамики данные берутся сервером из итогового файла
-    // (строки "ДТ ..." → колонка O), поэтому client-side расчёт используется
-    // только как запасной вариант и для отладки.
     collectSubdivisionData() {
         const subdivisionData = {};
         let currentFilial = null;
@@ -283,22 +165,22 @@ class DebtReconciliationManager {
             // ВАЖНО: Пропускаем строки контрагентов, договоров и итого
             if (this.isDocumentRow(row) && currentFilial && !processedRows.has(i)) {
                 // Проверяем, что это не строка контрагента или договора
-                const isKontragentOrDogovor = strVal.includes('Договор') ||
+                const isKontragentOrDogovor = strVal.includes('Договор') || 
                                               strVal.includes('договор') ||
-                                              (!strVal.includes('Акт') && !strVal.includes('Реализация') &&
+                                              (!strVal.includes('Акт') && !strVal.includes('Реализация') && 
                                                !strVal.includes('Корректировка') && !strVal.includes('Поступление') &&
                                                !strVal.includes('Взаимозачет') && !strVal.includes('Взаимозачёт') &&
                                                !strVal.includes('Списание') && !strVal.includes('УПД'));
-
+                
                 // Пропускаем если это не документ
                 if (isKontragentOrDogovor) {
                     continue;
                 }
-
+                
                 // ВАЖНО: берем значение из колонки OVERDUE (просрочено)
                 const rawValue = row[this.COLUMNS.OVERDUE];
                 const overdue = this.parseExcelNumber(rawValue || 0);
-
+                
                 // Добавляем только если строка ещё не была обработана
                 subdivisionData[currentFilial] += overdue;
                 totalOverdue += overdue;
@@ -908,26 +790,41 @@ class DebtReconciliationManager {
         const previousDayData = this.getPreviousDayData();
         console.log('previousDayData (из localStorage):', JSON.stringify(previousDayData));
 
+        // Рассчитываем общие суммы для сводки ДТ
+        let totalDebt = 0;
+        let totalOverdue = 0;
+        for (let i = 0; i < this.debtData.length; i++) {
+            const row = this.debtData[i];
+            if (!row) continue;
+            if (this.isDocumentRow(row)) {
+                totalDebt += this.parseExcelNumber(row[this.COLUMNS.DEBT_AMOUNT] || 0);
+                totalOverdue += this.parseExcelNumber(row[this.COLUMNS.OVERDUE] || 0);
+            }
+        }
+        totalDebt = Math.round(totalDebt * 100) / 100;
+        totalOverdue = Math.round(totalOverdue * 100) / 100;
+
         try {
             const formData = new FormData();
             formData.append('file', this.debtFile);
 
             // Формируем объект данных для сводных таблиц
-            // Примечание: totalDebt/totalOverdue рассчитываются сервером из итогового файла
             const summaryData = {
                 updatedDocuments: this.processedDocuments,
                 // Данные для таблицы динамики
                 previousDayData: previousDayData,
-                currentDayData: this.currentSubdivisionData,
+                currentDayData: this.currentSubdivisionData,  // ВАЖНО: это данные из debtData, а не из localStorage
                 currentDate: this.formatDate(this.currentDate),
                 previousDate: 'предыдущий рабочий день',
-                // Свод задолженности ДТ (судебная/не подлежащая/подлежащая — ручной ввод из настроек)
+                // Свод задолженности ДТ
                 summaryDT: {
+                    totalDebt: totalDebt,
+                    totalOverdue: totalOverdue,
                     legal: this.summaryDT.legal,
                     notRecoverable: this.summaryDT.notRecoverable,
                     recoverable: this.summaryDT.recoverable
                 },
-                // Свод задолженности СИ УАТ (не используется сервером, данные берутся из файла)
+                // Свод задолженности СИ УАТ
                 summarySIUAT: {
                     legal: this.summarySIUAT.legal,
                     notRecoverable: this.summarySIUAT.notRecoverable,

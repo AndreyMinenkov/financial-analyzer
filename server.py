@@ -193,42 +193,21 @@ def clear_all_intervals(ws, row):
     for col in interval_cols:
         safe_set_number_format(ws, row, col, 0)
 
-# Расширенный список типов документов (листья дерева)
+# Расширенный список типов документов
 DOCUMENT_KEYWORDS = [
     'Акт', 'Реализация', 'Корректировка', 'Поступление',
     'Взаимозачет', 'Взаимозачёт', 'Списание', 'УПД', 'Счет-фактура',
-    'Товарная накладная', 'ТОРГ-12', 'Универсальный передаточный',
-    'Определение'
-]
-
-# Промежуточные уровни (не листья, но и не итоги)
-INTERMEDIATE_KEYWORDS = [
-    'Счет на оплату', 'Счёт на оплату', 'Счет №', 'Счёт №',
-    'Договор', 'договор', 'Соглашение', 'Дополнительное соглашение',
-    'Передача права', 'Компенсации', 'Штрафы', 'Претензия'
+    'Товарная накладная', 'ТОРГ-12', 'Универсальный передаточный'
 ]
 
 def find_structure(ws):
-    """Находит все строки филиалов, контрагентов, договоров, промежуточных и документов
+    """Находит все строки филиалов, контрагентов, договоров и документов"""
+    filials = []      # строки с "ДТ "
+    kontragents = []  # любые строки, которые являются контрагентами
+    dogovors = []     # строки с "Договор"
+    documents = []    # строки с документами
+    total_row = None  # строка с "Итого"
 
-    Алгоритм определения уровней:
-    1. Филиал (ур. 0): начинается с "ДТ "
-    2. Документ (ур. 3): содержит DOCUMENT_KEYWORDS (листья дерева)
-    3. Промежуточный (ур. 2): НЕ документ, НЕ филиал, НЕ итого,
-       но имеет потомков (документы или другие промежуточные)
-    4. Контрагент (ур. 1): всё остальное — либо лист, либо родитель документов
-    5. Итого: содержит "Итого"
-
-    Промежуточные уровни определяются по наличию потомков:
-    - Если строка имеет ниже себя документы/промежуточные до следующего филиала/контрагента — это intermediate
-    - Если строка не имеет потомков — это kontragent (лист)
-    """
-    filials = []
-    kontragent_candidates = []  # потенциальные контрагенты/промежуточные
-    documents = []
-    total_row = None
-
-    # Первый проход: классифицируем по keywords
     for row in range(14, ws.max_row + 1):
         cell_value = ws.cell(row=row, column=1).value
         if not cell_value:
@@ -244,232 +223,144 @@ def find_structure(ws):
         elif 'Итого' in str_val or 'ИТОГО' in str_val:
             total_row = row
 
-        # 3. Документы по keywords (листья — Акт, Реализация, УПД и т.д.)
+        # 3. Договоры
+        elif str_val.startswith('Договор') or 'договор' in str_val.lower():
+            dogovors.append(row)
+
+        # 4. Документы - расширенная проверка
         elif any(keyword in str_val for keyword in DOCUMENT_KEYWORDS):
             documents.append(row)
 
-        # 4. Остальное — кандидаты в контрагенты или промежуточные
+        # 5. Контрагенты (все остальное, что не попало в другие категории)
         else:
+            # Проверяем, что это не пустая строка и не служебная
             if len(str_val) > 2 and not str_val[0].isdigit():
-                kontragent_candidates.append(row)
+                kontragents.append(row)
 
-    # Второй проход: определяем, какие kontragent_candidates имеют потомков
-    # и должны быть переклассифицированы как intermediates
-    kontragents = []
-    intermediates = []
-
-    # Создаём sorted список всех специальных строк для проверки потомков
-    all_special_sorted = sorted(filials + kontragent_candidates + documents)
-    filial_set = set(filials)
-    document_set = set(documents)
-    candidate_set = set(kontragent_candidates)
-
-    # Промежуточные по keywords: строки, содержащие INTERMEDIATE_KEYWORDS
-    # Эти строки — заголовки групп (Договор, Счёт, Соглашение и т.д.)
-    intermediate_by_keyword = set()
-    for candidate_row in kontragent_candidates:
-        cell_value = ws.cell(row=candidate_row, column=1).value
-        if cell_value:
-            str_val = str(cell_value).strip()
-            if any(keyword in str_val for keyword in INTERMEDIATE_KEYWORDS):
-                intermediate_by_keyword.add(candidate_row)
-
-    # Разделяем candidates:
-    # 1. intermediate_by_keyword → сразу intermediates
-    # 2. Остальные: проверяем наличие ПРЯМЫХ потомков-документов
-    #    (документ между candidate и следующим intermediate/контрагентом)
-    for candidate_row in kontragent_candidates:
-        if candidate_row in intermediate_by_keyword:
-            intermediates.append(candidate_row)
-            continue
-
-        # Проверяем, есть ли у candidate прямые потомки-документы
-        # (т.е. документ до следующего intermediate/контрагента/филиала)
-        candidate_idx = all_special_sorted.index(candidate_row)
-        has_direct_document_child = False
-
-        for j in range(candidate_idx + 1, len(all_special_sorted)):
-            next_row = all_special_sorted[j]
-
-            # Нашли следующий филиал или контрагент-кандидат — потомков нет
-            if next_row in filial_set or next_row in candidate_set:
-                break
-
-            # Нашли intermediate_by_keyword — document не прямой потомок candidate,
-            # а потомок этого intermediate. candidate = kontragent.
-            if next_row in intermediate_by_keyword:
-                break
-
-            # Нашли document — прямой потомок candidate → это intermediate
-            if next_row in document_set:
-                has_direct_document_child = True
-                break
-
-        if has_direct_document_child:
-            intermediates.append(candidate_row)
-        else:
-            kontragents.append(candidate_row)
-
-    return filials, kontragents, intermediates, documents, total_row
-
-def build_tree_hierarchy(filials, kontragents, intermediates, documents):
-    """Строит дерево иерархии: филиал → контрагент → промежуточные → документы
-    
-    Возвращает dict: parent_row -> [child_rows]
-    """
-    # Объединяем все строки с сортировкой
-    all_rows = sorted(filials + kontragents + intermediates + documents)
-    
-    # Определяем уровень каждой строки
-    row_levels = {}
-    for r in filials:
-        row_levels[r] = 0  # Филиал - уровень 0
-    for r in kontragents:
-        row_levels[r] = 1  # Контрагент - уровень 1
-    for r in intermediates:
-        row_levels[r] = 2  # Промежуточный - уровень 2
-    for r in documents:
-        row_levels[r] = 3  # Документ - уровень 3 (лист)
-    
-    # Строим дерево: для каждой строки находим непосредственных детей
-    children = {}
-    
-    for i, row in enumerate(all_rows):
-        current_level = row_levels[row]
-        children[row] = []
-        
-        # Ищем детей: следующие строки с уровнем current_level + 1
-        for j in range(i + 1, len(all_rows)):
-            next_row = all_rows[j]
-            next_level = row_levels[next_row]
-            
-            if next_level <= current_level:
-                # Нашли строку того же или высшего уровня - дети закончились
-                break
-            
-            if next_level == current_level + 1:
-                # Непосредственный ребёнок
-                children[row].append(next_row)
-    
-    return children
+    return filials, kontragents, dogovors, documents, total_row
 
 def recalc_totals(ws):
-    """Пересчитывает все итоговые строки в файле используя ДЕРЕВО иерархии
+    """Пересчитывает все итоговые строки в файле с учётом иерархии
     
-    Алгоритм:
-    1. Строим дерево: филиал → контрагент → промежуточные → документы
-    2. Считаем снизу вверх: каждый родитель = сумма его непосредственных детей
-    3. Это исключает двойное суммирование
+    Иерархия суммирования (строгая, без дублирования):
+    Документы → Договоры → Контрагенты → Филиалы → Итого
+    
+    ВАЖНО: Если у контрагента нет договоров, НЕ суммируем документы напрямую.
+    Контрагент уже содержит сумму в исходном файле.
     """
-    print("\n=== ПЕРЕСЧЁТ ИТОГОВ (ДЕРЕВО) ===")
+    print("\n=== ПЕРЕСЧЁТ ИТОГОВ ===")
 
-    filials, kontragents, intermediates, documents, total_row = find_structure(ws)
+    filials, kontragents, dogovors, documents, total_row = find_structure(ws)
 
     print(f"Найдено: филиалов={len(filials)}, контрагентов={len(kontragents)}, "
-          f"промежуточных={len(intermediates)}, документов={len(documents)}")
+          f"договоров={len(dogovors)}, документов={len(documents)}")
 
     # Создаём множества для быстрого поиска
-    all_special_rows = set(filials + kontragents + intermediates + documents)
-    if total_row:
-        all_special_rows.add(total_row)
-    
     kontragent_set = set(kontragents)
     filial_set = set(filials)
-    intermediate_set = set(intermediates)
+    dogovor_set = set(dogovors)
     document_set = set(documents)
 
-    # Строим дерево иерархии
-    children = build_tree_hierarchy(filials, kontragents, intermediates, documents)
-    
-    print(f"\nДерево иерархии:")
-    for parent, childs in children.items():
-        if childs:
-            print(f"  Строка {parent} → дети: {childs}")
+    # Функция для суммирования значений ТОЛЬКО для указанных строк
+    def sum_rows(rows, col):
+        total = 0
+        for r in rows:
+            val = get_cell_value(ws, r, col)
+            if isinstance(val, (int, float)):
+                total += val
+        return total
 
-    # Функция для получения значения ячейки
-    def get_val(row, col):
-        val = get_cell_value(ws, row, col)
-        return val if isinstance(val, (int, float)) else 0
+    # Функция для нахождения максимального значения дней среди указанных строк
+    def max_days_in_rows(rows):
+        max_val = 0
+        for r in rows:
+            val = get_cell_value(ws, r, COLUMNS['DAYS'])
+            if isinstance(val, (int, float)) and val > max_val:
+                max_val = val
+        return max_val
 
-    # Считаем снизу вверх: для каждого родителя суммируем детей
-    # Обрабатываем в обратном порядке (от документов к филиалам)
-    all_rows_sorted = sorted(filials + kontragents + intermediates, reverse=True)
-    
-    calculated_rows = set()  # Отслеживаем уже пересчитанные строки
+    # 1. Пересчитываем договоры (суммируем документы под ними)
+    for i, dog_row in enumerate(dogovors):
+        # Находим документы, принадлежащие этому договору
+        doc_rows = []
+        for r in range(dog_row + 1, ws.max_row + 1):
+            if r in dogovor_set or r in kontragent_set or r in filial_set or r == total_row:
+                break
+            if r in document_set:
+                doc_rows.append(r)
 
-    for parent_row in all_rows_sorted:
-        childs = children.get(parent_row, [])
-        
-        if not childs:
-            # Нет детей - пропускаем (оставляем значение из файла)
-            print(f"Строка {parent_row}: нет детей, пропускаем")
-            continue
-        
-        # Проверяем, есть ли среди детей уже пересчитанные строки
-        # Если да - используем их значения (они уже содержат сумму своих детей)
-        # Если нет - суммируем документы напрямую
-        
-        has_calculated_childs = any(c in calculated_rows for c in childs)
+        if doc_rows:
+            print(f"Договор стр.{dog_row}: документы {doc_rows}")
 
-        if has_calculated_childs:
-            # Среди детей есть уже пересчитанные - суммируем их значения
-            # Непересчитанные дети-документы уже учтены в значениях пересчитанных промежуточных,
-            # поэтому суммировать их отдельно нельзя - это приведёт к задвоению.
-            # НО: непересчитанные контрагенты-листы и документы-листы (без детей) НЕ учтены нигде,
-            # их нужно добавить к сумме.
-            calculated_childs = [c for c in childs if c in calculated_rows]
-            # Листовые контрагенты: не пересчитаны И kontragent
-            leaf_kontragents = [c for c in childs if c not in calculated_rows and c in kontragent_set]
-            # Листовые документы: не пересчитаны И document (т.е. документы без потомков)
-            leaf_docs = [c for c in childs if c not in calculated_rows and c in document_set]
+            # Суммируем все денежные колонки по документам
+            for col in SUM_COLUMNS:
+                total = sum_rows(doc_rows, col)
+                safe_set_number_format(ws, dog_row, col, total)
 
-            all_summed_childs = calculated_childs + leaf_kontragents + leaf_docs
+            # Для дней берём максимальное значение среди документов
+            max_day = max_days_in_rows(doc_rows)
+            safe_set_value(ws, dog_row, COLUMNS['DAYS'], max_day)
 
-            print(f"Строка {parent_row}: суммируем пересчитанных {calculated_childs} + листовые контрагенты {leaf_kontragents} + листовые документы {leaf_docs} (из {childs})")
+    # 2. Пересчитываем контрагентов (суммируем ТОЛЬКО договоры под ними)
+    # ВАЖНО: Если нет договоров - НЕ трогаем контрагента!
+    # Контрагент уже содержит правильную сумму в исходном файле.
+    # Это предотвращает двойное суммирование.
+    for i, kontr_row in enumerate(kontragents):
+        # Находим договоры, принадлежащие этому контрагенту
+        dog_rows = []
+        for r in range(kontr_row + 1, ws.max_row + 1):
+            if r in kontragent_set or r in filial_set or r == total_row:
+                break
+            if r in dogovor_set:
+                dog_rows.append(r)
+
+        if dog_rows:
+            print(f"Контрагент стр.{kontr_row}: договоры {dog_rows}")
+
+            # Суммируем ВСЕ денежные колонки по договорам
+            for col in SUM_COLUMNS:
+                total = sum_rows(dog_rows, col)
+                safe_set_number_format(ws, kontr_row, col, total)
+
+            max_day = max_days_in_rows(dog_rows)
+            safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
+        else:
+            # Нет договоров - НЕ трогаем контрагента
+            # Он уже содержит правильную сумму из исходного файла
+            print(f"Контрагент стр.{kontr_row}: нет договоров, пропускаем (используем значение из файла)")
+
+    # 3. Пересчитываем филиалы (суммируем контрагентов под ними)
+    for i, fil_row in enumerate(filials):
+        # Находим контрагентов, принадлежащие этому филиалу
+        kontr_rows = []
+        for r in range(fil_row + 1, ws.max_row + 1):
+            if r in filial_set or r == total_row:
+                break
+            if r in kontragent_set:
+                kontr_rows.append(r)
+
+        if kontr_rows:
+            print(f"Филиал стр.{fil_row}: контрагенты {kontr_rows}")
 
             for col in SUM_COLUMNS:
-                total = sum(get_val(c, col) for c in all_summed_childs)
-                safe_set_number_format(ws, parent_row, col, total)
+                total = sum_rows(kontr_rows, col)
+                safe_set_number_format(ws, fil_row, col, total)
 
-            # Для дней берём максимум
-            max_day = max((get_val(c, COLUMNS['DAYS']) for c in all_summed_childs), default=0)
-            safe_set_value(ws, parent_row, COLUMNS['DAYS'], max_day)
-        else:
-            # Нет пересчитанных детей - суммируем документы и контрагенты-листы
-            doc_childs = [c for c in childs if c in document_set]
-            leaf_kontragents = [c for c in childs if c in kontragent_set]
-
-            all_summed_childs = doc_childs + leaf_kontragents
-
-            if all_summed_childs:
-                print(f"Строка {parent_row}: суммируем документы {doc_childs} + листовые контрагенты {leaf_kontragents}")
-
-                for col in SUM_COLUMNS:
-                    total = sum(get_val(c, col) for c in all_summed_childs)
-                    safe_set_number_format(ws, parent_row, col, total)
-
-                max_day = max((get_val(c, COLUMNS['DAYS']) for c in all_summed_childs), default=0)
-                safe_set_value(ws, parent_row, COLUMNS['DAYS'], max_day)
-            else:
-                # Дети - не документы и не контрагенты (например, промежуточные без детей)
-                # Оставляем как есть
-                print(f"Строка {parent_row}: дети не документы и не контрагенты, пропускаем")
-                continue
-        
-        calculated_rows.add(parent_row)
+            max_day = max_days_in_rows(kontr_rows)
+            safe_set_value(ws, fil_row, COLUMNS['DAYS'], max_day)
 
     # 4. Пересчитываем общий итог (суммируем филиалы)
     if total_row and filials:
-        print(f"\nОбщий итог стр.{total_row}: филиалы {filials}")
+        print(f"Общий итог стр.{total_row}: филиалы {filials}")
 
         for col in SUM_COLUMNS:
-            total = sum(get_val(f, col) for f in filials)
+            total = sum_rows(filials, col)
             safe_set_number_format(ws, total_row, col, total)
 
-        max_day = max((get_val(f, COLUMNS['DAYS']) for f in filials), default=0)
+        max_day = max_days_in_rows(filials)
         safe_set_value(ws, total_row, COLUMNS['DAYS'], max_day)
 
-    print("=== ПЕРЕСЧЁТ ИТОГОВ (ДЕРЕВО) ЗАВЕРШЕН ===\n")
+    print("=== ПЕРЕСЧЁТ ИТОГОВ (НИЖНЯЯ ТАБЛИЦА) ЗАВЕРШЕН ===\n")
 
 def update_top_table(ws, total_row):
     """Обновляет верхнюю сводную таблицу (строки 1-8) значениями из итоговой строки"""
@@ -695,69 +586,41 @@ def save_excel():
         # Выравниваем все числовые ячейки по правому краю
         align_numeric_cells(ws)
 
-        # ===== 1. ПЕРЕИМЕНОВЫВАЕМ ГЛАВНЫЙ ЛИСТ =====
-        ws.title = 'Свод ДЗ'
-        print(f"\nГлавный лист переименован в 'Свод ДЗ'")
+        # ===== СОЗДАЁМ ДОПОЛНИТЕЛЬНЫЕ ЛИСТЫ =====
 
-        # ===== 2. ИЗВЛЕКАЕМ ДАННЫЕ ИЗ ИТОГОВОГО ФАЙЛА =====
+        # data уже содержит все поля summaryData (updatedDocuments, currentDayData, summaryDT и т.д.)
+        print(f"\n=== Ключи в data: {list(data.keys())}")
 
-        # 2a. Просрочка по филиалам (для таблицы динамики)
-        current_day_data_from_file = extract_filial_overdue(ws)
-        data['currentDayData'] = current_day_data_from_file
-
-        # 2b. Общая ДЗ и ПДЗ из итоговой строки (для "Свод задолженности ДТ")
-        total_debt_data = extract_total_row_debt(ws, total_row)
-        print(f"Из итоговой строки: общая ДЗ={total_debt_data['totalDebt']}, ПДЗ={total_debt_data['totalOverdue']}")
-
-        # ===== 3. ДОБАВЛЯЕМ ЛИСТ «Свод ДЗ СИ УАТ» =====
+        # 1. Лист «Свод ДЗ СИ УАТ» — копируем из загруженного файла с ПОЛНЫМ форматированием
         siuat_file = request.files.get('siUatFile')
-        siuat_total_debt = 0
-        siuat_total_overdue = 0
         if siuat_file and siuat_file.filename:
             print(f"\n=== ДОБАВЛЯЕМ ЛИСТ 'Свод ДЗ СИ УАТ' из файла {siuat_file.filename} ===")
             try:
                 siuat_wb = openpyxl.load_workbook(io.BytesIO(siuat_file.read()))
                 siuat_ws = siuat_wb.active
 
-                # Переименовываем исходный лист СИ УАТ ПЕРЕД копированием,
-                # чтобы избежать конфликта имён (Excel может переименовать в "Свод Д31")
-                siuat_ws.title = 'Свод ДЗ СИ УАТ'
-
                 # Полное копирование с сохранением всего форматирования
-                # (функция возвращает созданный лист)
-                new_siuat_ws = copy_worksheet_full(siuat_ws, wb)
+                copy_worksheet_full(siuat_ws, wb)
 
-                print(f"Лист 'Свод ДЗ СИ УАТ' добавлен, все листы: {wb.sheetnames}")
-
-                # Извлекаем общую ДЗ и ПДЗ из СИ УАТ
-                siuat_totals = extract_siuat_totals(new_siuat_ws)
-                siuat_total_debt = siuat_totals['totalDebt']
-                siuat_total_overdue = siuat_totals['totalOverdue']
-                print(f"СИ УАТ: общая ДЗ={siuat_total_debt}, ПДЗ={siuat_total_overdue}")
-
+                print("Лист 'Свод ДЗ СИ УАТ' добавлен с полным форматированием")
             except Exception as e:
                 print(f"!!! Ошибка при добавлении листа СИ УАТ: {e}")
                 traceback.print_exc()
         else:
             print("Файл СИ УАТ не загружен, пропускаем лист 'Свод ДЗ СИ УАТ'")
 
-        # ===== 4. СОЗДАЁМ ЛИСТ «Сводные таблицы» =====
+        # 2. Лист «Сводные таблицы»
         print("\n=== СОЗДАЁМ ЛИСТ 'Сводные таблицы' ===")
+        print(f"currentDayData: {json.dumps(data.get('currentDayData', {}), ensure_ascii=False)[:300]}")
+        print(f"previousDayData: {json.dumps(data.get('previousDayData', {}), ensure_ascii=False)[:300]}")
+        print(f"summaryDT: {data.get('summaryDT', {})}")
         try:
             summary_ws = wb.create_sheet('Сводные таблицы')
-            create_summary_sheet(
-                summary_ws,
-                data,
-                total_debt=total_debt_data['totalDebt'],
-                total_overdue=total_debt_data['totalOverdue'],
-                siuat_total_debt=siuat_total_debt,
-                siuat_total_overdue=siuat_total_overdue,
-            )
-            print("Лист 'Сводные таблицы' создан")
+            create_summary_sheet(summary_ws, data)
+            print("Лист 'Сводные таблицы' создан успешно")
         except Exception as e:
-            print(f"!!! Ошибка при создании листа сводных таблиц: {e}")
+            print(f"!!! Ошибка при создании листа 'Сводные таблицы': {e}")
             traceback.print_exc()
-
 
         # Сохраняем результат
         output = io.BytesIO()
@@ -779,11 +642,11 @@ def save_excel():
         traceback.print_exc()
         return {'error': str(e)}, 500
 
-def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_debt=0, siuat_total_overdue=0):
+def create_summary_sheet(ws, data):
     """Создаёт лист 'Сводные таблицы' с тремя блоками:
     1. Динамика по подразделениям
-    2. Свод задолженности ДТ (данные из итогового файла)
-    3. Свод задолженности СИ УАТ (2 строки: Общая ДЗ, Из них ПДЗ)
+    2. Свод задолженности ДТ
+    3. Свод задолженности СИ УАТ
     """
     print("Создание листа 'Сводные таблицы'...")
 
@@ -791,6 +654,8 @@ def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_de
     previous_date = data.get('previousDate', '')
     current_day_data = data.get('currentDayData', {})
     previous_day_data = data.get('previousDayData', {})
+    summary_dt = data.get('summaryDT', {})
+    summary_siuat = data.get('summarySIUAT', {})
 
     # Стили
     title_font = Font(bold=True, size=14)
@@ -902,13 +767,9 @@ def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_de
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
     row += 2
 
-    # Данные: общая ДЗ и ПДЗ — из итогового файла; судебная/взыскание — из настроек
-    summary_dt = data.get('summaryDT', {})
-    print(f"Свод ДТ: общая ДЗ={total_debt}, ПДЗ={total_overdue}, судебная={summary_dt.get('legal', 0)}")
-
     summary_dt_data = [
-        ('общая ДЗ', total_debt),
-        ('из них ПДЗ', total_overdue),
+        ('общая ДЗ', summary_dt.get('totalDebt', 0)),
+        ('из них ПДЗ', summary_dt.get('totalOverdue', 0)),
         ('в т.ч. Судебная', summary_dt.get('legal', 0)),
         ('не подлежащая к взысканию', summary_dt.get('notRecoverable', 0)),
         ('подлежащая к взысканию', summary_dt.get('recoverable', 0)),
@@ -919,8 +780,6 @@ def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_de
         cell_label.border = thin_border
         if 'ПДЗ' in label:
             cell_label.font = Font(bold=True, color='FF0000')
-        elif 'Судебная' in label:
-            cell_label.font = Font(bold=True, color='0000FF')
         else:
             cell_label.font = Font(bold=True)
 
@@ -930,280 +789,36 @@ def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_de
         cell_value.alignment = Alignment(horizontal='right')
         if 'ПДЗ' in label:
             cell_value.font = Font(bold=True, color='FF0000')
-        elif 'Судебная' in label:
-            cell_value.font = Font(bold=True, color='0000FF')
         else:
             cell_value.font = Font(bold=True)
         row += 1
 
-    row += 3
+    row += 2
 
     # ===== ТАБЛИЦА 3: Свод задолженности СИ УАТ =====
     ws.cell(row=row, column=1, value='Свод задолженности СИ УАТ').font = title_font
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
     row += 2
 
-    # Только 2 строки: Общая ДЗ и Из них ПДЗ (из файла СИ УАТ)
-    print(f"Свод СИ УАТ: общая ДЗ={siuat_total_debt}, ПДЗ={siuat_total_overdue}")
-
     summary_siuat_data = [
-        ('Общая ДЗ', siuat_total_debt),
-        ('Из них ПДЗ', siuat_total_overdue),
+        ('в т.ч. Судебная', summary_siuat.get('legal', 0)),
+        ('не подлежащая к взысканию', summary_siuat.get('notRecoverable', 0)),
+        ('подлежащая к взысканию', summary_siuat.get('recoverable', 0)),
     ]
 
     for label, value in summary_siuat_data:
         cell_label = ws.cell(row=row, column=1, value=label)
         cell_label.border = thin_border
-        if 'ПДЗ' in label:
-            cell_label.font = Font(bold=True, color='FF0000')
-        else:
-            cell_label.font = Font(bold=True)
+        cell_label.font = Font(bold=True)
 
         cell_value = ws.cell(row=row, column=2, value=value)
         cell_value.number_format = number_format
         cell_value.border = thin_border
         cell_value.alignment = Alignment(horizontal='right')
-        if 'ПДЗ' in label:
-            cell_value.font = Font(bold=True, color='FF0000')
-        else:
-            cell_value.font = Font(bold=True)
+        cell_value.font = Font(bold=True)
         row += 1
 
-    print(f"Лист 'Сводные таблицы' создан, последняя строка: {row}")
-
-
-@app.route('/save-suppliers', methods=['POST'])
-def save_suppliers():
-    """Обработка и сохранение сводных таблиц оплат поставщикам
-
-    Структура файла на выходе:
-    - Строки 1..M: Оригинальный реестр платежей
-    - Строки M+3..: Сводная таблица (ниже реестра)
-    """
-    try:
-        file = request.files['file']
-        data = json.loads(request.form['data'])
-
-        print(f"\n=== ПОЛУЧЕН ЗАПРОС НА ОБРАБОТКУ ОПЛАТ ПОСТАВЩИКАМ ===")
-        print(f"Файл: {file.filename}")
-        print(f"Сводных таблиц: {len(data.get('pivotTables', []))}")
-
-        wb = openpyxl.load_workbook(io.BytesIO(file.read()))
-
-        # Обрабатываем каждую сводную таблицу
-        for pivot_table in data.get('pivotTables', []):
-            sheet_name = pivot_table['sheetName']
-            headers = pivot_table['headers']
-            rows_data = pivot_table['data']
-
-            print(f"\nОбработка сводной таблицы: {sheet_name}")
-            print(f"  Подразделений: {len(headers)}")
-            print(f"  Контрагентов: {len(rows_data)}")
-
-            # Находим оригинальный лист
-            if sheet_name not in wb.sheetnames:
-                print(f"  Предупреждение: лист '{sheet_name}' не найден, создаём новый")
-                ws = wb.create_sheet(sheet_name)
-                last_row = 0
-            else:
-                ws = wb[sheet_name]
-                last_row = ws.max_row
-                print(f"  Реестр заканчивается на строке: {last_row}")
-
-            # Сводные таблицы формируем НИЖЕ реестра, через 3 пустые строки
-            pivot_start_row = last_row + 4
-
-            # Создаём сводную таблицу ниже реестра
-            create_pivot_sheet_at_row(ws, headers, rows_data, 'Сводная таблица', pivot_start_row)
-
-            print(f"  Сводная таблица добавлена со строки: {pivot_start_row}")
-
-        # Сохраняем результат
-        output = io.BytesIO()
-        wb.save(output)
-        output.seek(0)
-
-        print("\n=== ФАЙЛ ОПЛАТ УСПЕШНО ОБРАБОТАН, ОТПРАВЛЯЕМ ===\n")
-
-        return send_file(
-            output,
-            as_attachment=True,
-            download_name=f'Оплаты_поставщикам_{datetime.now().strftime("%Y-%m-%d")}.xlsx',
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-
-    except Exception as e:
-        print("\n!!! ОШИБКА ПРИ ОБРАБОТКЕ ОПЛАТ !!!")
-        print(str(e))
-        traceback.print_exc()
-        return {'error': str(e)}, 500
-
-
-def create_pivot_sheet_at_row(ws, headers, rows_data, title, start_row):
-    """Создаёт сводную таблицу оплат поставщикам начиная с указанной строки"""
-    print(f"Создание сводной таблицы '{title}', начиная со строки {start_row}...")
-
-    # Стили
-    title_font = Font(bold=True, size=14)
-    header_font = Font(bold=True, size=11, color='FFFFFF')
-    header_fill = PatternFill(start_color='1F3864', end_color='1F3864', fill_type='solid')
-    explanation_fill = PatternFill(start_color='FFF2CC', end_color='FFF2CC', fill_type='solid')
-    total_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
-    number_format = '#,##0.00'
-    thin_border = Border(
-        left=Side(style='thin'),
-        right=Side(style='thin'),
-        top=Side(style='thin'),
-        bottom=Side(style='thin')
-    )
-
-    row = start_row
-    # Заголовок
-    ws.cell(row=row, column=1, value='Сводная таблица оплат по подразделениям').font = title_font
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=len(headers) + 3)
-    row += 2
-
-    # Шапка таблицы
-    header_cells = ['Контрагент'] + headers + ['Итого', 'Пояснение']
-    for col, header in enumerate(header_cells, 1):
-        cell = ws.cell(row=row, column=col, value=header)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-        cell.border = thin_border
-    row += 1
-
-    # Данные
-    total_all = 0
-    for item in rows_data:
-        ws.cell(row=row, column=1, value=item['contractor']).border = thin_border
-
-        total_sum = 0
-        for col_idx, h in enumerate(headers, 2):
-            value = item.get(h, 0)
-            cell = ws.cell(row=row, column=col_idx, value=value)
-            cell.number_format = number_format
-            cell.border = thin_border
-            cell.alignment = Alignment(horizontal='right')
-            total_sum += value
-
-        total_all += total_sum
-
-        # Итого
-        cell_total = ws.cell(row=row, column=len(headers) + 2, value=total_sum)
-        cell_total.number_format = number_format
-        cell_total.border = thin_border
-        cell_total.alignment = Alignment(horizontal='right')
-
-        # Пояснение
-        cell_explanation = ws.cell(row=row, column=len(headers) + 3, value=item.get('explanation', ''))
-        cell_explanation.border = thin_border
-
-        # Жёлтый фон для строк с пояснениями
-        if item.get('explanation'):
-            for col_idx in range(1, len(headers) + 4):
-                cell = ws.cell(row=row, column=col_idx)
-                cell.fill = explanation_fill
-
-        row += 1
-
-    # Итоговая строка
-    ws.cell(row=row, column=1, value='ИТОГО').font = Font(bold=True, size=11)
-    ws.cell(row=row, column=1).fill = total_fill
-    ws.cell(row=row, column=1).border = thin_border
-
-    # Суммы по подразделениям
-    for col_idx, h in enumerate(headers, 2):
-        subtotal = sum(item.get(h, 0) for item in rows_data)
-        cell = ws.cell(row=row, column=col_idx, value=subtotal)
-        cell.number_format = number_format
-        cell.font = Font(bold=True, size=11)
-        cell.fill = total_fill
-        cell.border = thin_border
-        cell.alignment = Alignment(horizontal='right')
-
-    # Общий итог
-    cell_grand_total = ws.cell(row=row, column=len(headers) + 2, value=total_all)
-    cell_grand_total.number_format = number_format
-    cell_grand_total.font = Font(bold=True, size=11)
-    cell_grand_total.fill = total_fill
-    cell_grand_total.border = thin_border
-    cell_grand_total.alignment = Alignment(horizontal='right')
-
-    ws.cell(row=row, column=len(headers) + 3).fill = total_fill
-    ws.cell(row=row, column=len(headers) + 3).border = thin_border
-
-    print(f"Сводная таблица '{title}' создана, строк: {row - start_row + 1}")
-
-
-def extract_filial_overdue(ws):
-    """Извлекает суммы просрочки из итоговых строк филиалов (колонка O = OVERDUE)
-
-    Проходит по всем строкам, находит строки начинающиеся с 'ДТ ',
-    берёт значение из колонки COLUMNS['OVERDUE'] (просрочено).
-    Используется после recalc_totals, когда итоговые строки уже пересчитаны.
-    """
-    filial_data = {}
-    for row in range(14, ws.max_row + 1):
-        # Используем get_cell_value для корректной работы с объединёнными ячейками
-        cell_value = get_cell_value(ws, row, 1)
-        if not cell_value:
-            continue
-        str_val = str(cell_value).strip()
-        # Ищем строки филиалов
-        if str_val.startswith('ДТ '):
-            overdue = get_cell_value(ws, row, COLUMNS['OVERDUE'])
-            filial_data[str_val] = overdue if isinstance(overdue, (int, float)) else 0
-    # Округляем до 2 знаков
-    for key in filial_data:
-        filial_data[key] = round(filial_data[key], 2)
-    print(f"\n=== ИЗВЛЕЧЕНЫ ДАННЫЕ ФИЛИАЛОВ (из итогового файла) ===")
-    for filial, amount in sorted(filial_data.items()):
-        print(f"  {filial}: {amount:,.2f}")
-    print(f"  Всего филиалов: {len(filial_data)}")
-    return filial_data
-
-
-def extract_total_row_debt(ws, total_row):
-    """Извлекает общую ДЗ (колонка L) и ПДЗ (колонка O) из итоговой строки"""
-    result = {'totalDebt': 0, 'totalOverdue': 0}
-    if not total_row:
-        print("  Итоговая строка не найдена, используем нули")
-        return result
-    total_debt = get_cell_value(ws, total_row, COLUMNS['DEBT_AMOUNT'])
-    total_overdue = get_cell_value(ws, total_row, COLUMNS['OVERDUE'])
-    result['totalDebt'] = round(total_debt, 2) if isinstance(total_debt, (int, float)) else 0
-    result['totalOverdue'] = round(total_overdue, 2) if isinstance(total_overdue, (int, float)) else 0
-    return result
-
-
-def extract_siuat_totals(ws):
-    """Извлекает общую ДЗ и ПДЗ из файла СИ УАТ по максимальным значениям в колонках.
-
-    Берёт максимальное число из колонки L (общая ДЗ) и колонки O (ПДЗ).
-    """
-    result = {'totalDebt': 0, 'totalOverdue': 0}
-
-    # Ищем максимальное значение в колонке L (общая ДЗ)
-    max_debt = 0
-    for row in range(1, ws.max_row + 1):
-        val = get_cell_value(ws, row, COLUMNS['DEBT_AMOUNT'])
-        if isinstance(val, (int, float)) and val > max_debt:
-            max_debt = val
-
-    # Ищем максимальное значение в колонке O (ПДЗ)
-    max_overdue = 0
-    for row in range(1, ws.max_row + 1):
-        val = get_cell_value(ws, row, COLUMNS['OVERDUE'])
-        if isinstance(val, (int, float)) and val > max_overdue:
-            max_overdue = val
-
-    result['totalDebt'] = round(max_debt, 2)
-    result['totalOverdue'] = round(max_overdue, 2)
-    print(f"  СИ УАТ totals (по максимуму): totalDebt={result['totalDebt']}, totalOverdue={result['totalOverdue']}")
-
-    return result
-
+    print("Лист 'Сводные таблицы' создан")
 
 if __name__ == '__main__':
     print("Сервер запущен. Для остановки нажми Ctrl+C\n")
