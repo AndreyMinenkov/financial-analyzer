@@ -607,18 +607,36 @@ def save_excel():
         if siuat_file and siuat_file.filename:
             print(f"\n=== ДОБАВЛЯЕМ ЛИСТ 'Свод ДЗ СИ УАТ' из файла {siuat_file.filename} ===")
             try:
+                # Удаляем ВСЕ существующие листы «Свод ДЗ СИ УАТ*» (из прошлых запусков)
+                for sheet_name in list(wb.sheetnames):
+                    if sheet_name.startswith('Свод ДЗ СИ УАТ'):
+                        del wb[sheet_name]
+                        print(f"  Удалён существующий лист: {sheet_name}")
+
                 siuat_wb = openpyxl.load_workbook(io.BytesIO(siuat_file.read()))
-                siuat_ws = siuat_wb.active
+                print(f"  Листы в файле СИ УАТ: {siuat_wb.sheetnames}")
 
-                # Переименовываем исходный лист СИ УАТ ПЕРЕД копированием,
-                # чтобы избежать конфликта имён (Excel может переименовать в "Свод Д31")
-                siuat_ws.title = 'Свод ДЗ СИ УАТ'
+                # Ищем правильный лист-источник (НЕ "Свод ДЗ" и НЕ "Сводные таблицы")
+                # Если файл уже содержит результаты прошлой обработки, в нём есть 3 листа
+                excluded_names = ['Свод ДЗ', 'Сводные таблицы', 'Свод ДЗ СИ УАТ']
+                siuat_ws = None
+                for sn in siuat_wb.sheetnames:
+                    if sn not in excluded_names:
+                        siuat_ws = siuat_wb[sn]
+                        print(f"  Найден лист-источник СИ УАТ: '{sn}'")
+                        break
 
-                # Полное копирование с сохранением всего форматирования
-                # (функция возвращает созданный лист)
+                if siuat_ws is None:
+                    # Если не нашли подходящий — берём активный
+                    siuat_ws = siuat_wb.active
+                    print(f"  Лист-источник не найден, используем активный: '{siuat_ws.title}'")
+
+                # Копируем лист с сохранением всего форматирования
                 new_siuat_ws = copy_worksheet_full(siuat_ws, wb)
 
-                print(f"Лист 'Свод ДЗ СИ УАТ' добавлен, все листы: {wb.sheetnames}")
+                # Переименовываем скопированный лист
+                new_siuat_ws.title = 'Свод ДЗ СИ УАТ'
+                print(f"Лист переименован в 'Свод ДЗ СИ УАТ', все листы: {wb.sheetnames}")
 
                 # Извлекаем общую ДЗ и ПДЗ из СИ УАТ
                 siuat_totals = extract_siuat_totals(new_siuat_ws)
@@ -872,40 +890,56 @@ def extract_total_row_debt(ws, total_row):
 
 
 def extract_siuat_totals(ws):
-    """Извлекает общую ДЗ и ПДЗ из файла СИ УАТ по максимальным значениям в колонках."""
+    """Извлекает общую ДЗ и ПДЗ из файла СИ УАТ.
+
+    Сначала ищет колонки по заголовкам в строках 1-5.
+    Если не находит — ищет максимальные значения во всех колонках.
+    """
     result = {'totalDebt': 0, 'totalOverdue': 0}
 
-    # Сначала ищем колонки по заголовкам
+    # --- Отладка: выводим заголовки строк 1-5 ---
+    print("  === ЗАГОЛОВКИ СИ УАТ (строки 1-5) ===")
+    for row in range(1, 6):
+        for col in range(1, 15):
+            header = get_cell_value(ws, row, col)
+            if header:
+                print(f"    Строка {row}, Колонка {col}: '{header}' (type={type(header).__name__})")
+
+    # Ищем колонки по заголовкам в строках 1-5
     debt_col = None
     overdue_col = None
-    debt_keywords = ['всего', 'общая', 'сумма долга', 'долг', 'общая дз', 'общая задолженность']
-    overdue_keywords = ['просрочено', 'пдз', 'просроч', 'свыше', 'просроченная']
+    debt_keywords = ['всего', 'общая', 'сумма долга', 'долг', 'общая дз', 'общая задолженность', 'общ.дз']
+    overdue_keywords = ['просрочено', 'пдз', 'просроч', 'свыше', 'просроченная', 'просроченн']
 
-    for col in range(1, 30):
-        header = get_cell_value(ws, 1, col)
-        if not header:
-            continue
-        h_str = str(header).lower().strip()
-        if debt_col is None:
-            for kw in debt_keywords:
-                if kw in h_str:
-                    debt_col = col
-                    print(f"  Найдена колонка общей ДЗ: колонка {col} = '{header}'")
-                    break
-        if overdue_col is None:
-            for kw in overdue_keywords:
-                if kw in h_str:
-                    overdue_col = col
-                    print(f"  Найдена колонка ПДЗ: колонка {col} = '{header}'")
-                    break
+    for row in range(1, 6):
+        for col in range(1, 30):
+            header = get_cell_value(ws, row, col)
+            if not header:
+                continue
+            h_str = str(header).lower().strip()
+            if debt_col is None:
+                for kw in debt_keywords:
+                    if kw in h_str:
+                        debt_col = col
+                        print(f"  Найдена колонка общей ДЗ: строка {row}, колонка {col} = '{header}'")
+                        break
+            if overdue_col is None:
+                for kw in overdue_keywords:
+                    if kw in h_str:
+                        overdue_col = col
+                        print(f"  Найдена колонка ПДЗ: строка {row}, колонка {col} = '{header}'")
+                        break
+        if debt_col and overdue_col:
+            break
 
     if debt_col is None:
         debt_col = COLUMNS['DEBT_AMOUNT']
-        print(f"  Колонка общей ДЗ не найдена по заголовку, используем L (колонка {debt_col})")
+        print(f"  Колонка общей ДЗ не найдена, используем L (колонка {debt_col})")
     if overdue_col is None:
         overdue_col = COLUMNS['OVERDUE']
-        print(f"  Колонка ПДЗ не найдена по заголовку, используем O (колонка {overdue_col})")
+        print(f"  Колонка ПДЗ не найдена, используем O (колонка {overdue_col})")
 
+    # Ищем максимальные значения в найденных колонках
     max_debt = 0
     for row in range(1, ws.max_row + 1):
         val = get_cell_value(ws, row, debt_col)
@@ -917,9 +951,22 @@ def extract_siuat_totals(ws):
         if isinstance(val, (int, float)) and val > max_overdue:
             max_overdue = val
 
+    # Если не нашли — ищем максимумы по всем колонкам
+    if max_debt == 0 or max_overdue == 0:
+        print("  === ПОИСК МАКСИМУМОВ ПО ВСЕМ КОЛОНКАМ ===")
+        for col in range(1, 30):
+            col_max = 0
+            for row in range(1, ws.max_row + 1):
+                val = get_cell_value(ws, row, col)
+                if isinstance(val, (int, float)) and val > col_max:
+                    col_max = val
+            if col_max > 0:
+                header = get_cell_value(ws, 1, col)
+                print(f"    Колонка {col} ('{header}'): max={col_max}")
+
     result['totalDebt'] = round(max_debt, 2)
     result['totalOverdue'] = round(max_overdue, 2)
-    print(f"  СИ УАТ totals: колонка ДЗ={debt_col}, колонка ПДЗ={overdue_col}, totalDebt={result['totalDebt']}, totalOverdue={result['totalOverdue']}")
+    print(f"  ИТОГО СИ УАТ: колонка ДЗ={debt_col}, колонка ПДЗ={overdue_col}, totalDebt={result['totalDebt']}, totalOverdue={result['totalOverdue']}")
     return result
 
 
