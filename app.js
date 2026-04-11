@@ -818,6 +818,10 @@ class App {
         document.getElementById('summarySiuatNotRecoverable').value = this.debtManager.summarySIUAT.notRecoverable || '';
         document.getElementById('summarySiuatRecoverable').value = this.debtManager.summarySIUAT.recoverable || '';
 
+        // Заполняем дату предыдущего дня
+        const previousInfo = this.debtManager.getPreviousDayData();
+        document.getElementById('previousDayDateInput').value = previousInfo.date || '';
+
         // Заполняем таблицу данных предыдущего дня из localStorage
         this.renderPreviousDayDataTable();
 
@@ -828,7 +832,8 @@ class App {
     renderPreviousDayDataTable() {
         const tbody = document.getElementById('previousDayDataBody');
         const statsEl = document.getElementById('previousDayStats');
-        const previousData = this.debtManager.getPreviousDayData();
+        const previousInfo = this.debtManager.getPreviousDayData();
+        const previousData = previousInfo.data || previousInfo; // совместимость со старым форматом
 
         if (Object.keys(previousData).length === 0) {
             tbody.innerHTML = '<tr class="empty-row"><td colspan="2">Данные не загружены. Загрузите Excel файл.</td></tr>';
@@ -917,6 +922,16 @@ class App {
             recoverable: parseFloat(document.getElementById('summarySiuatRecoverable').value) || 0
         };
 
+        // Сохраняем дату предыдущего дня
+        const previousDate = document.getElementById('previousDayDateInput').value;
+        const previousInfo = this.debtManager.getPreviousDayData();
+        if (Object.keys(previousInfo.data || previousInfo).length > 0 || previousDate) {
+            localStorage.setItem('previousDayDebt_manual', JSON.stringify({
+                data: previousInfo.data || previousInfo,
+                date: previousDate
+            }));
+        }
+
         // Данные предыдущего дня сохраняются автоматически при загрузке из файла
         // Здесь просто сохраняем сводные данные
         this.debtManager.saveSummaryData();
@@ -934,12 +949,14 @@ class App {
     updatePreviousDayIndicator() {
         const indicator = document.getElementById('previousDayIndicator');
         const indicatorText = document.getElementById('previousDayIndicatorText');
-        const previousData = this.debtManager.getPreviousDayData();
+        const previousInfo = this.debtManager.getPreviousDayData();
+        const previousData = previousInfo.data || previousInfo; // совместимость со старым форматом
 
         if (Object.keys(previousData).length > 0) {
             indicator.style.display = 'flex';
             indicator.className = 'previous-day-indicator loaded';
-            indicatorText.textContent = `Данные за предыдущий день загружены (${Object.keys(previousData).length} подразделений)`;
+            const dateStr = previousInfo.date ? ` (${previousInfo.date})` : '';
+            indicatorText.textContent = `Данные за предыдущий день загружены${dateStr} (${Object.keys(previousData).length} подразделений)`;
         } else {
             indicator.style.display = 'flex';
             indicator.className = 'previous-day-indicator warning';

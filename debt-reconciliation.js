@@ -114,21 +114,34 @@ class DebtReconciliationManager {
         }
     }
 
-    // Получить данные предыдущего дня из localStorage (единый ключ для ручных данных)
+    // Получить данные предыдущего дня из localStorage
+    // Возвращает { data: {}, date: '' }
     getPreviousDayData() {
         try {
-            const data = localStorage.getItem('previousDayDebt_manual');
-            return data ? JSON.parse(data) : {};
+            const raw = localStorage.getItem('previousDayDebt_manual');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                // Если сохранён в новом формате { data: {...}, date: 'YYYY-MM-DD' }
+                if (parsed && typeof parsed === 'object' && 'data' in parsed) {
+                    return { data: parsed.data || {}, date: parsed.date || '' };
+                }
+                // Старый формат — просто объект данных
+                return { data: parsed, date: '' };
+            }
         } catch (e) {
             console.error('Ошибка загрузки данных предыдущего дня:', e);
-            return {};
         }
+        return { data: {}, date: '' };
     }
 
-    // Сохранить данные текущего дня в localStorage (для использования завтра — единый ключ)
+    // Сохранить данные текущего дня в localStorage (для использования завтра)
     saveCurrentDayData() {
         try {
-            localStorage.setItem('previousDayDebt_manual', JSON.stringify(this.currentSubdivisionData));
+            const payload = {
+                data: this.currentSubdivisionData,
+                date: this.formatDate(this.currentDate)
+            };
+            localStorage.setItem('previousDayDebt_manual', JSON.stringify(payload));
             console.log('Данные текущего дня сохранены для использования завтра');
         } catch (e) {
             console.error('Ошибка сохранения данных текущего дня:', e);
@@ -286,7 +299,12 @@ class DebtReconciliationManager {
 
             // Полная замена: удаляем старые данные и записываем новые
             try {
-                localStorage.setItem('previousDayDebt_manual', JSON.stringify(previousDayData));
+                // Сохраняем в новом формате { data: {...}, date: '' }
+                // Дату можно заполнить при сохранении через saveCurrentDayData
+                localStorage.setItem('previousDayDebt_manual', JSON.stringify({
+                    data: previousDayData,
+                    date: ''
+                }));
                 console.log(`Данные предыдущего дня полностью заменены: ${parsedCount} записей, общая сумма: ${totalAmount.toFixed(2)}`);
             } catch (e) {
                 console.error('Ошибка сохранения в localStorage:', e);
@@ -891,8 +909,8 @@ class DebtReconciliationManager {
         console.log('currentDayData (из debtData, колонка O):', JSON.stringify(this.currentSubdivisionData));
 
         // Получаем данные предыдущего дня из localStorage
-        const previousDayData = this.getPreviousDayData();
-        console.log('previousDayData (из localStorage):', JSON.stringify(previousDayData));
+        const previousDayInfo = this.getPreviousDayData();
+        console.log('previousDayData (из localStorage):', JSON.stringify(previousDayInfo.data));
 
         // Рассчитываем общие суммы для сводки ДТ
         let totalDebt = 0;
@@ -916,10 +934,10 @@ class DebtReconciliationManager {
             const summaryData = {
                 updatedDocuments: this.processedDocuments,
                 // Данные для таблицы динамики
-                previousDayData: previousDayData,
+                previousDayData: previousDayInfo.data,
                 currentDayData: this.currentSubdivisionData,  // ВАЖНО: это данные из debtData, а не из localStorage
                 currentDate: this.formatDate(this.currentDate),
-                previousDate: 'предыдущий рабочий день',
+                previousDate: previousDayInfo.date || 'предыдущий рабочий день',
                 // Свод задолженности ДТ
                 summaryDT: {
                     totalDebt: totalDebt,

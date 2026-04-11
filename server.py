@@ -875,7 +875,20 @@ def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_de
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
     row += 2
 
-    headers = ['Подразделение', current_date, previous_date, 'Динамика']
+    # Преобразуем даты из YYYY-MM-DD в DD.MM.YYYY для заголовков
+    def format_date_ddmmyyyy(date_str):
+        if not date_str or date_str in ('предыдущий рабочий день',):
+            return date_str
+        try:
+            dt = datetime.fromisoformat(date_str)
+            return dt.strftime('%d.%m.%Y')
+        except (ValueError, TypeError):
+            return date_str
+
+    current_date_formatted = format_date_ddmmyyyy(current_date)
+    previous_date_formatted = format_date_ddmmyyyy(previous_date)
+
+    headers = ['Подразделение', current_date_formatted, previous_date_formatted, 'Динамика']
     for col, header in enumerate(headers, 1):
         cell = ws.cell(row=row, column=col, value=header)
         cell.font = header_font_white
