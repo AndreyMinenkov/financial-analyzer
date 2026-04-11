@@ -985,54 +985,34 @@ def _parse_cell_number(value):
 def extract_siuat_totals_by_max(ws):
     """Извлекает totalDebt и totalOverdue из листа СИ УАТ.
 
-    Стратегия:
-    1. Ищем строку "ИТОГО" только после 200-й строки
-    2. Берём данные из столбцов 12 (общая ДЗ) и 15 (ПДЗ)
-    3. Если не нашли "ИТОГО" — берём максимальные значения по строкам после 200
+    Стратегия: суммируем столбцы 12 и 15 по всем строкам, начинающимся с 'ДТ '.
     """
     total_col = 12
     overdue_col = 15
     print(f"  Используем колонки: всего={total_col}, просроченно={overdue_col}")
 
-    # Ищем "ИТОГО" только после 200-й строки
-    itogo_row = None
-    for r in range(201, ws.max_row + 1):
+    total_debt = 0
+    total_overdue = 0
+    dt_count = 0
+
+    for r in range(1, ws.max_row + 1):
         cell_val = get_cell_value(ws, r, 1)
-        if cell_val:
-            str_val = str(cell_val).strip().lower()
-            if 'итог' in str_val:
-                itogo_row = r
-                print(f"  Найдена строка 'ИТОГО' на строке {r}")
-                break
+        if not cell_val:
+            continue
+        str_val = str(cell_val).strip()
+        if str_val.startswith('ДТ '):
+            v_total = _parse_cell_number(get_cell_value(ws, r, total_col))
+            v_overdue = _parse_cell_number(get_cell_value(ws, r, overdue_col))
+            total_debt += v_total
+            total_overdue += v_overdue
+            dt_count += 1
+            if dt_count <= 3:
+                print(f"    ДТ '{str_val}': col12={v_total}, col15={v_overdue}")
 
-    # Если нашли "ИТОГО" после 200-й строки — берём данные из неё
-    if itogo_row:
-        v_total = _parse_cell_number(get_cell_value(ws, itogo_row, total_col))
-        v_overdue = _parse_cell_number(get_cell_value(ws, itogo_row, overdue_col))
-        total_debt = round(v_total, 2)
-        total_overdue = round(v_overdue, 2)
-        print(f"  Данные из строки 'ИТОГО' (строка {itogo_row}): общая ДЗ={total_debt}, ПДЗ={total_overdue}")
+    total_debt = round(total_debt, 2)
+    total_overdue = round(total_overdue, 2)
 
-        if total_debt > 0 and total_overdue > 0:
-            return total_debt, total_overdue
-
-    # Если не нашли "ИТОГО" или данные = 0, ищем максимальные значения по строкам после 200
-    print(f"  Ищем максимальные значения по строкам после 200...")
-    max_debt = 0
-    max_overdue = 0
-
-    for r in range(201, ws.max_row + 1):
-        v_total = _parse_cell_number(get_cell_value(ws, r, total_col))
-        if v_total > max_debt:
-            max_debt = v_total
-
-        v_overdue = _parse_cell_number(get_cell_value(ws, r, overdue_col))
-        if v_overdue > max_overdue:
-            max_overdue = v_overdue
-
-    total_debt = round(max_debt, 2)
-    total_overdue = round(max_overdue, 2)
-
+    print(f"  Найдено подразделений ДТ: {dt_count}")
     print(f"  Результат: общая ДЗ={total_debt}, ПДЗ={total_overdue}")
 
     return total_debt, total_overdue
