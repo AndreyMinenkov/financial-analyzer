@@ -172,25 +172,12 @@ class DebtReconciliationManager {
             }
 
             // Документ — добавляем просрочку к текущему филиалу
-            // ВАЖНО: Пропускаем строки контрагентов, договоров и итого
+            // isDocumentRow уже содержит полную проверку на ключевые слова документов
             if (this.isDocumentRow(row) && currentFilial && !processedRows.has(i)) {
-                // Проверяем, что это не строка контрагента или договора
-                const isKontragentOrDogovor = strVal.includes('Договор') || 
-                                              strVal.includes('договор') ||
-                                              (!strVal.includes('Акт') && !strVal.includes('Реализация') && 
-                                               !strVal.includes('Корректировка') && !strVal.includes('Поступление') &&
-                                               !strVal.includes('Взаимозачет') && !strVal.includes('Взаимозачёт') &&
-                                               !strVal.includes('Списание') && !strVal.includes('УПД'));
-                
-                // Пропускаем если это не документ
-                if (isKontragentOrDogovor) {
-                    continue;
-                }
-                
                 // ВАЖНО: берем значение из колонки OVERDUE (просрочено)
                 const rawValue = row[this.COLUMNS.OVERDUE];
                 const overdue = this.parseExcelNumber(rawValue || 0);
-                
+
                 // Добавляем только если строка ещё не была обработана
                 subdivisionData[currentFilial] += overdue;
                 totalOverdue += overdue;
@@ -630,31 +617,39 @@ class DebtReconciliationManager {
 
     // Находит контрагента для строки документа (расширенная версия)
     findKontragentForRow(rowIndex) {
+        // Полный список ключевых слов документов (должен совпадать с server.py)
+        const documentKeywords = [
+            'Акт', 'Реализация', 'Корректировка', 'Поступление',
+            'Взаимозачет', 'Взаимозачёт', 'Списание', 'УПД', 'Счет-фактура',
+            'Товарная накладная', 'ТОРГ-12', 'Универсальный передаточный'
+        ];
+
         for (let i = rowIndex - 1; i >= 14; i--) {
             const row = this.debtData[i];
             if (!row) continue;
             const cellValue = row[0];
             if (!cellValue) continue;
             const strVal = String(cellValue).trim();
-            
+
             // Проверяем, является ли строка филиалом
             if (strVal.startsWith('ДТ ')) {
                 return null;  // дошли до филиала - контрагент не найден
             }
-            
+
+            // Проверяем, является ли строка договором (начинается с "Договор")
+            if (strVal.startsWith('Договор') || strVal.startsWith('договор')) {
+                continue;  // пропускаем строки договоров
+            }
+
+            // Проверяем, является ли строка документом
+            const isDocument = documentKeywords.some(keyword => strVal.includes(keyword));
+            if (isDocument) {
+                continue;  // пропускаем строки документов
+            }
+
             // Проверяем, является ли строка контрагентом
-            // Теперь считаем контрагентом любую непустую строку, которая:
-            // - не начинается с ДТ
-            // - не содержит "Договор"
-            // - не содержит слова из списка документов
-            // - имеет длину > 2 символов
-            if (strVal.length > 2 && 
-                !strVal.includes('Договор') && 
-                !strVal.includes('Акт') && 
-                !strVal.includes('Реализация') && 
-                !strVal.includes('Корректировка') && 
-                !strVal.includes('Поступление') && 
-                !strVal.startsWith('ДТ ')) {
+            // Контрагент — любая непустая строка, которая не попала в категории выше
+            if (strVal.length > 2) {
                 return strVal;
             }
         }

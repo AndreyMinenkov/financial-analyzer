@@ -201,9 +201,13 @@ DOCUMENT_KEYWORDS = [
 ]
 
 def find_structure(ws):
-    """Находит все строки филиалов, контрагентов, договоров и документов"""
+    """Находит все строки филиалов, контрагентов, договоров и документов
+
+    Важно: строки классифицируются по приоритету. Если строка содержит ключевое слово
+    документа, она считается документом, даже если содержит слово "договор" в другом контексте.
+    """
     filials = []      # строки с "ДТ "
-    kontragents = []  # любые строки, которые являются контрагентами
+    kontragents = []  # строки контрагентов
     dogovors = []     # строки с "Договор"
     documents = []    # строки с документами
     total_row = None  # строка с "Итого"
@@ -215,7 +219,7 @@ def find_structure(ws):
 
         str_val = str(cell_value).strip()
 
-        # 1. Филиалы
+        # 1. Филиалы (наивысший приоритет после Итого)
         if str_val.startswith('ДТ '):
             filials.append(row)
 
@@ -223,13 +227,17 @@ def find_structure(ws):
         elif 'Итого' in str_val or 'ИТОГО' in str_val:
             total_row = row
 
-        # 3. Договоры
-        elif str_val.startswith('Договор') or 'договор' in str_val.lower():
-            dogovors.append(row)
-
-        # 4. Документы - расширенная проверка
+        # 3. Документы — проверяем ДО договоров, чтобы избежать ложных срабатываний
+        #    Строка может содержать "Договор" как часть описания документа (например, "Договор поставки...")
+        #    но если в ней есть ключевое слово документа — это документ, а не запись договора
         elif any(keyword in str_val for keyword in DOCUMENT_KEYWORDS):
             documents.append(row)
+
+        # 4. Договоры — только если нет ключевых слов документов
+        elif str_val.startswith('Договор') or (str_val.startswith('договор') and not any(kw in str_val for kw in DOCUMENT_KEYWORDS)):
+            # Дополнительная проверка: если строка начинается с "Договор" и содержит
+            # номер договора (цифры/буквы после слова), но НЕ содержит ключевых слов документов — это договор
+            dogovors.append(row)
 
         # 5. Контрагенты (все остальное, что не попало в другие категории)
         else:
@@ -241,12 +249,15 @@ def find_structure(ws):
 
 def recalc_totals(ws):
     """Пересчитывает все итоговые строки в файле с учётом иерархии
-    
+
     Иерархия суммирования (строгая, без дублирования):
     Документы → Договоры → Контрагенты → Филиалы → Итого
-    
-    ВАЖНО: Если у контрагента нет договоров, НЕ суммируем документы напрямую.
-    Контрагент уже содержит сумму в исходном файле.
+
+    Правила:
+    - Если у договора есть документы → суммируем документы
+    - Если у контрагента есть договоры → суммируем договоры
+    - Если у контрагента НЕТ договоров, но ЕСТЬ документы → суммируем документы напрямую
+    - Если у контрагента нет ни договоров ни документов → пропускаем (используем значение из файла)
     """
     print("\n=== ПЕРЕСЧЁТ ИТОГОВ ===")
 
@@ -300,34 +311,47 @@ def recalc_totals(ws):
             # Для дней берём максимальное значение среди документов
             max_day = max_days_in_rows(doc_rows)
             safe_set_value(ws, dog_row, COLUMNS['DAYS'], max_day)
+        else:
+            print(f"Договор стр.{dog_row}: нет документов, пропускаем")
 
-    # 2. Пересчитываем контрагентов (суммируем ТОЛЬКО договоры под ними)
-    # ВАЖНО: Если нет договоров - НЕ трогаем контрагента!
-    # Контрагент уже содержит правильную сумму в исходном файле.
-    # Это предотвращает двойное суммирование.
+    # 2. Пересчитываем контрагентов
+    #    Два варианта: есть договоры ИЛИ есть только документы
     for i, kontr_row in enumerate(kontragents):
         # Находим договоры, принадлежащие этому контрагенту
         dog_rows = []
+        # Находим документы, принадлежащие этому контрагенту (на случай если нет договоров)
+        doc_rows = []
         for r in range(kontr_row + 1, ws.max_row + 1):
             if r in kontragent_set or r in filial_set or r == total_row:
                 break
             if r in dogovor_set:
                 dog_rows.append(r)
+            elif r in document_set:
+                doc_rows.append(r)
 
         if dog_rows:
+            # Вариант А: есть договоры — суммируем договоры (которые уже пересчитаны по документам)
             print(f"Контрагент стр.{kontr_row}: договоры {dog_rows}")
 
-            # Суммируем ВСЕ денежные колонки по договорам
             for col in SUM_COLUMNS:
                 total = sum_rows(dog_rows, col)
                 safe_set_number_format(ws, kontr_row, col, total)
 
             max_day = max_days_in_rows(dog_rows)
             safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
+        elif doc_rows:
+            # Вариант Б: нет договоров, но есть документы — суммируем документы напрямую
+            print(f"Контрагент стр.{kontr_row}: нет договоров, документы {doc_rows}")
+
+            for col in SUM_COLUMNS:
+                total = sum_rows(doc_rows, col)
+                safe_set_number_format(ws, kontr_row, col, total)
+
+            max_day = max_days_in_rows(doc_rows)
+            safe_set_value(ws, kontr_row, COLUMNS['DAYS'], max_day)
         else:
-            # Нет договоров - НЕ трогаем контрагента
-            # Он уже содержит правильную сумму из исходного файла
-            print(f"Контрагент стр.{kontr_row}: нет договоров, пропускаем (используем значение из файла)")
+            # Вариант В: нет ни договоров ни документов — пропускаем
+            print(f"Контрагент стр.{kontr_row}: нет договоров и документов, пропускаем (используем значение из файла)")
 
     # 3. Пересчитываем филиалы (суммируем контрагентов под ними)
     for i, fil_row in enumerate(filials):
@@ -485,13 +509,16 @@ def copy_worksheet_full(ws, wb):
     # 7. Копируем freeze panes
     if ws.sheet_view and ws.sheet_view.pane:
         pane = ws.sheet_view.pane
-        new_ws.sheet_view.pane = Pane(
-            active_pane=pane.activePane,
-            state=pane.state,
-            top_left_cell=pane.topLeftCell,
-            x_split=pane.xSplit,
-            y_split=pane.ySplit
-        )
+        try:
+            new_ws.sheet_view.pane = Pane(
+                xSplit=pane.xSplit,
+                ySplit=pane.ySplit,
+                topLeftCell=pane.topLeftCell,
+                activePane=pane.activePane,
+                state=pane.state
+            )
+        except (TypeError, AttributeError):
+            print(f"  Пропущена настройка freeze panes (несовместимость версий)")
     
     # 8. Копируем автофильтр
     if ws.auto_filter.ref:
@@ -989,7 +1016,15 @@ def extract_siuat_totals_by_max(ws):
     """
     total_col = 12
     overdue_col = 15
+    print(f"\n  === extract_siuat_totals_by_max START ===")
+    print(f"  Лист: '{ws.title}', строк: {ws.max_row}, колонок: {ws.max_column}")
     print(f"  Используем колонки: всего={total_col}, просроченно={overdue_col}")
+
+    # Отладка: покажем первые 15 строк столбца 1
+    print(f"  ОТЛАДКА: первые 15 строк столбца 1:")
+    for r in range(1, min(16, ws.max_row + 1)):
+        val = ws.cell(row=r, column=1).value
+        print(f"    строка {r}: '{val}'")
 
     total_debt = 0
     total_overdue = 0
@@ -1006,14 +1041,15 @@ def extract_siuat_totals_by_max(ws):
             total_debt += v_total
             total_overdue += v_overdue
             dt_count += 1
-            if dt_count <= 3:
-                print(f"    ДТ '{str_val}': col12={v_total}, col15={v_overdue}")
+            if dt_count <= 5:
+                print(f"    ДТ#{dt_count} '{str_val}': col{total_col}={v_total}, col{overdue_col}={v_overdue}")
 
     total_debt = round(total_debt, 2)
     total_overdue = round(total_overdue, 2)
 
     print(f"  Найдено подразделений ДТ: {dt_count}")
     print(f"  Результат: общая ДЗ={total_debt}, ПДЗ={total_overdue}")
+    print(f"  === extract_siuat_totals_by_max END ===\n")
 
     return total_debt, total_overdue
 
