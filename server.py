@@ -524,25 +524,22 @@ def save_excel():
         # ===== ШАГ 0: ПЕРЕИМЕНОВЫВАЕМ ВСЕ ЛИСТЫ СРАЗУ =====
         # Это самая первая операция, чтобы избежать любых конфликтов имён
         print("\n=== ШАГ 0: ПЕРЕИМЕНОВАНИЕ ЛИСТОВ ===")
-        original_main_ws = None
-        original_siuat_ws = None
-        original_summary_ws = None
 
-        # Собираем все листы в списки по типу
+        # Собираем все листы
         all_sheets = list(wb.sheetnames)
         print(f"  Исходные листы: {all_sheets}")
 
-        # Определяем типы листов
-        sheets_to_rename = {}  # old_name -> new_name
-        sheets_to_delete = []
+        # === Определяем листы по содержимому ===
+        siuat_sheets = []     # листы, начинающиеся с "Свод ДЗ СИ УАТ" или "Свод ДЗ СИ"
+        summary_sheets = []   # листы, содержащие "Сводные"
+        main_sheets = []      # листы с данными ДЗ (содержат "ДТ ")
 
         for sheet_name in all_sheets:
             if sheet_name.startswith('Свод ДЗ СИ УАТ') or sheet_name.startswith('Свод ДЗ СИ'):
-                sheets_to_rename[sheet_name] = 'Свод ДЗ СИ УАТ'
+                siuat_sheets.append(sheet_name)
             elif 'Сводные' in sheet_name or 'Сводная' in sheet_name:
-                sheets_to_rename[sheet_name] = 'Сводные таблицы'
+                summary_sheets.append(sheet_name)
             else:
-                # Это главный лист (или другие листы)
                 # Проверяем, содержит ли данные ДЗ
                 test_ws = wb[sheet_name]
                 is_main = False
@@ -553,29 +550,65 @@ def save_excel():
                         break
 
                 if is_main:
-                    sheets_to_rename[sheet_name] = 'Свод ДЗ'
-                else:
-                    # Это какой-то другой лист - удаляем если начинается с "Свод"
-                    if sheet_name.startswith('Свод'):
-                        sheets_to_delete.append(sheet_name)
+                    main_sheets.append(sheet_name)
 
-        # Сначала удаляем ненужные листы
-        for sn in sheets_to_delete:
-            del wb[sn]
-            print(f"  Удалён лишний лист: {sn}")
+        print(f"  main_sheets={main_sheets}, siuat_sheets={siuat_sheets}, summary_sheets={summary_sheets}")
 
-        # Теперь переименовываем
-        # Сначала переименовываем НЕ главные, чтобы избежать конфликтов
-        for old_name, new_name in sheets_to_rename.items():
-            if new_name != 'Свод ДЗ' and old_name != new_name and old_name in wb.sheetnames:
-                wb[old_name].title = new_name
-                print(f"  Переименован: '{old_name}' → '{new_name}'")
+        # === СТРАТЕГИЯ ПЕРЕИМЕНОВАНИЯ ===
+        # Основной файл содержит 2 листа с данными ДТ:
+        #   - Первый лист (main_sheets[0]) = главный → "Свод ДЗ"
+        #   - Второй лист (main_sheets[1], если есть) = СИ УАТ → "Свод ДЗ СИ УАТ"
+        #
+        # Порядок переименования: сначала переименовываем ВСЁ во временные имена,
+        # чтобы избежать конфликтов, затем в целевые.
 
-        # Переименовываем главный лист
-        for old_name, new_name in sheets_to_rename.items():
-            if new_name == 'Свод ДЗ' and old_name != new_name and old_name in wb.sheetnames:
-                wb[old_name].title = new_name
-                print(f"  Переименован: '{old_name}' → '{new_name}'")
+        sheets_to_process = []  # (old_name, new_name)
+
+        # 1. Сначала переименовываем все листы в уникальные временные имена
+        temp_names = {}
+        temp_counter = 0
+
+        for sheet_name in all_sheets:
+            if sheet_name.startswith('Свод ДЗ СИ УАТ') or sheet_name.startswith('Свод ДЗ СИ'):
+                temp_counter += 1
+                temp_names[sheet_name] = f'__temp_siuat_{temp_counter}__'
+            elif 'Сводные' in sheet_name or 'Сводная' in sheet_name:
+                temp_counter += 1
+                temp_names[sheet_name] = f'__temp_summary_{temp_counter}__'
+
+        # Для листов с данными ДЗ
+        for idx, sheet_name in enumerate(main_sheets):
+            if idx == 0:
+                temp_names[sheet_name] = '__temp_main__'
+            elif idx == 1:
+                temp_names[sheet_name] = '__temp_siuat_from_main__'
+            else:
+                temp_names[sheet_name] = f'__temp_extra_{idx}__'
+
+        # Переименовываем во временные имена
+        for old_name, temp_name in temp_names.items():
+            if old_name != temp_name and old_name in wb.sheetnames:
+                wb[old_name].title = temp_name
+                print(f"  Шаг 1: '{old_name}' → '{temp_name}'")
+
+        # 2. Теперь переименовываем в целевые имена
+        # Находим листы по временным именам
+        for sn in list(wb.sheetnames):
+            if sn == '__temp_main__':
+                wb[sn].title = 'Свод ДЗ'
+                print(f"  Шаг 2: '__temp_main__' → 'Свод ДЗ'")
+            elif sn == '__temp_siuat_from_main__':
+                wb[sn].title = 'Свод ДЗ СИ УАТ'
+                print(f"  Шаг 2: '__temp_siuat_from_main__' → 'Свод ДЗ СИ УАТ'")
+            elif sn.startswith('__temp_siuat_'):
+                wb[sn].title = 'Свод ДЗ СИ УАТ'
+                print(f"  Шаг 2: '{sn}' → 'Свод ДЗ СИ УАТ'")
+            elif sn.startswith('__temp_summary_'):
+                wb[sn].title = 'Сводные таблицы'
+                print(f"  Шаг 2: '{sn}' → 'Сводные таблицы'")
+            elif sn.startswith('__temp_extra_'):
+                del wb[sn]
+                print(f"  Удалён лишний лист: {sn}")
 
         print(f"  Листы после переименования: {wb.sheetnames}")
         print("=== ПЕРЕИМЕНОВАНИЕ ЗАВЕРШЕНО ===\n")
