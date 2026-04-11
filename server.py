@@ -308,13 +308,17 @@ def build_hierarchy(ws, start_row=14):
 def recalc_totals(ws):
     """Пересчитывает итоги по древовидной структуре на основе отступов ячеек.
 
+    Ключевой принцип: суммируем ТОЛЬКО листья (узлы без детей).
+    Это исключает двойной учёт, потому что промежуточные строки уже
+    содержат сумму своих детей из исходного файла.
+
     Алгоритм:
     1. Строим дерево по отступам (indent) столбца A
-    2. Проходим от листьев к корням (по убыванию номера строки)
-    3. Для каждого родителя: сумма = сумма прямых детей
-    4. Итого = сумма филиалов (корней дерева)
+    2. Находим все листья (узлы без детей)
+    3. Для каждого узла суммируем значения всех листьев в его поддереве
+    4. Итого = сумма всех листьев под филиалами
     """
-    print("\n=== ПЕРЕСЧЁТ ИТОГОВ (по отступам) ===")
+    print("\n=== ПЕРЕСЧЁТ ИТОГОВ (по отступам, только листья) ===")
 
     nodes, total_row, filial_rows = build_hierarchy(ws)
 
@@ -324,69 +328,93 @@ def recalc_totals(ws):
 
     print(f"Найдено узлов: {len(nodes)}, филиалов: {len(filial_rows)}, итого: строка {total_row}")
 
-    # Отладка: покажем структуру для первых нескольких узлов
-    debug_count = 0
-    for row in sorted(nodes.keys()):
-        if debug_count >= 20:
-            break
-        n = nodes[row]
-        val = ws.cell(row=row, column=1).value
-        child_list = ', '.join(str(c) for c in n['children'][:5])
-        if len(n['children']) > 5:
-            child_list += '...'
-        print(f"  строка {row} [indent={n['indent']}]: {val} -> дети: [{child_list}]")
-        debug_count += 1
+    # Находим листья (узлы без детей)
+    leaves = set()
+    for row, node in nodes.items():
+        if not node['children']:
+            leaves.add(row)
+    print(f"Листьев: {len(leaves)}")
 
-    # Функция для суммирования значений по указанным строкам
-    def sum_rows(rows, col):
+    # Отладка: покажем первые 10 листьев
+    debug_leaves = sorted(leaves)[:10]
+    for row in debug_leaves:
+        val = ws.cell(row=row, column=1).value
+        print(f"  лист строка {row}: {val}")
+
+    # Функция: собрать все листья в поддереве узла
+    def get_all_leaves_under(row):
+        node = nodes.get(row)
+        if not node:
+            return set()
+        if row in leaves:
+            return {row}
+        result = set()
+        for child in node['children']:
+            result |= get_all_leaves_under(child)
+        return result
+
+    # Функция для суммирования значений по указанным строкам (листьям)
+    def sum_leaves(leaf_set, col):
         total = 0
-        for r in rows:
+        for r in leaf_set:
             val = get_cell_value(ws, r, col)
             if isinstance(val, (int, float)):
                 total += val
         return total
 
-    def max_days_in_rows(rows):
+    def max_days_in_leaf_set(leaf_set):
         max_val = 0
-        for r in rows:
+        for r in leaf_set:
             val = get_cell_value(ws, r, COLUMNS['DAYS'])
             if isinstance(val, (int, float)) and val > max_val:
                 max_val = val
         return max_val
 
-    # Проходим от листьев к корням (строки с бОльшим номером обрабатываем первыми)
-    # Это гарантирует что дети пересчитаны до обработки родителя
+    # Пересчитываем все узлы (от листьев к корням)
     sorted_rows = sorted(nodes.keys(), reverse=True)
     recalculated_count = 0
 
     for row in sorted_rows:
         node = nodes[row]
-        if not node['children']:
-            continue  # лист — не пересчитываем
+        if row in leaves:
+            continue  # листья не пересчитываем
 
-        children = node['children']
+        # Собираем все листья в поддереве
+        leaf_set = get_all_leaves_under(row)
+        if not leaf_set:
+            continue
+
         recalculated_count += 1
 
-        # Суммируем все денежные колонки по детям
+        # Суммируем только листья
         for col in SUM_COLUMNS:
-            total = sum_rows(children, col)
+            total = sum_leaves(leaf_set, col)
             safe_set_number_format(ws, row, col, total)
 
-        # Для дней берём максимум
-        max_day = max_days_in_rows(children)
+        # Для дней берём максимум среди листьев
+        max_day = max_days_in_leaf_set(leaf_set)
         safe_set_value(ws, row, COLUMNS['DAYS'], max_day)
+
+        # Отладка: первые 5 пересчитанных узлов
+        if recalculated_count <= 5:
+            val = ws.cell(row=row, column=1).value
+            print(f"  Пересчёт строка {row}: {val} -> сумма по {len(leaf_set)} листьям")
 
     print(f"Пересчитано узлов: {recalculated_count}")
 
-    # Пересчитываем общий итог (суммируем филиалы)
+    # Пересчитываем общий итог (суммируем все листья под филиалами)
     if total_row and filial_rows:
-        print(f"Общий итог стр.{total_row}: филиалы {filial_rows}")
+        all_leaves_under_filials = set()
+        for fil_row in filial_rows:
+            all_leaves_under_filials |= get_all_leaves_under(fil_row)
+
+        print(f"Общий итог стр.{total_row}: {len(all_leaves_under_filials)} листьев под филиалами")
 
         for col in SUM_COLUMNS:
-            total = sum_rows(filial_rows, col)
+            total = sum_leaves(all_leaves_under_filials, col)
             safe_set_number_format(ws, total_row, col, total)
 
-        max_day = max_days_in_rows(filial_rows)
+        max_day = max_days_in_leaf_set(all_leaves_under_filials)
         safe_set_value(ws, total_row, COLUMNS['DAYS'], max_day)
 
     print("=== ПЕРЕСЧЁТ ИТОГОВ ЗАВЕРШЁН ===\n")
