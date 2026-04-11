@@ -238,7 +238,7 @@ class DebtReconciliationManager {
         }
     }
 
-    // Загрузка данных предыдущего дня из Excel файла
+    // Загрузка данных предыдущего дня из Excel файла (полная замена данных)
     async loadPreviousDayDataFromFile(file) {
         console.log('Загрузка данных предыдущего дня из файла:', file.name);
         try {
@@ -268,9 +268,10 @@ class DebtReconciliationManager {
 
             console.log(`Найдены колонки: Подразделение=${subdivisionCol + 1}, Сумма ПДЗ=${amountCol + 1}`);
 
-            // Парсим данные
+            // Полная замена данных — создаём новый объект
             const previousDayData = {};
             let parsedCount = 0;
+            let totalAmount = 0;
 
             for (let i = 1; i < rows.length; i++) {
                 const row = rows[i];
@@ -286,6 +287,7 @@ class DebtReconciliationManager {
                     if (subdivisionName && amountValue !== 0) {
                         previousDayData[subdivisionName] = amountValue;
                         parsedCount++;
+                        totalAmount += amountValue;
                     }
                 }
             }
@@ -294,28 +296,43 @@ class DebtReconciliationManager {
                 return { success: false, message: 'Не найдено данных для загрузки' };
             }
 
-            // Сохраняем в localStorage как данные предыдущего дня
+            // Полная замена: удаляем старые данные и записываем новые
             try {
                 localStorage.setItem('previousDayDebt_manual', JSON.stringify(previousDayData));
-                console.log('Данные предыдущего дня сохранены в localStorage:', previousDayData);
+                console.log(`Данные предыдущего дня полностью заменены: ${parsedCount} записей, общая сумма: ${totalAmount.toFixed(2)}`);
             } catch (e) {
                 console.error('Ошибка сохранения в localStorage:', e);
                 return { success: false, message: 'Ошибка сохранения данных: ' + e.message };
             }
 
-            // Обновляем currentSubdivisionData для отображения в таблице настроек
+            // Обновляем currentSubdivisionData для отображения в таблице
             this.currentSubdivisionData = previousDayData;
 
             console.log(`Загружено ${parsedCount} записей:`, previousDayData);
 
             return {
                 success: true,
-                message: `Загружено ${parsedCount} записей из файла`,
-                data: previousDayData
+                message: `Загружено ${parsedCount} подразделений. Общая сумма: ${totalAmount.toFixed(2)}`,
+                data: previousDayData,
+                count: parsedCount,
+                total: totalAmount
             };
         } catch (error) {
             console.error('Ошибка загрузки файла:', error);
             return { success: false, message: 'Ошибка загрузки файла: ' + error.message };
+        }
+    }
+
+    // Очистка данных предыдущего дня
+    clearPreviousDayData() {
+        try {
+            localStorage.removeItem('previousDayDebt_manual');
+            this.currentSubdivisionData = {};
+            console.log('Данные предыдущего дня очищены');
+            return { success: true, message: 'Данные очищены' };
+        } catch (e) {
+            console.error('Ошибка очистки данных:', e);
+            return { success: false, message: 'Ошибка очистки: ' + e.message };
         }
     }
 

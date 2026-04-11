@@ -410,6 +410,11 @@ class App {
             this.saveSummarySettings();
         });
 
+        // Кнопка очистки данных предыдущего дня
+        document.getElementById('clearPreviousDayDataBtn').addEventListener('click', () => {
+            this.clearPreviousDayData();
+        });
+
         // Загрузка данных предыдущего дня из Excel файла
         const loadPreviousDayFileBtn = document.getElementById('loadPreviousDayFileBtn');
         const previousDayFileInput = document.getElementById('previousDayFileInput');
@@ -421,9 +426,26 @@ class App {
 
         previousDayFileInput.addEventListener('change', async (e) => {
             if (e.target.files.length > 0) {
-                await this.loadPreviousDayDataFromFile(e.target.files[0]);
-                // Обновляем таблицу после загрузки
-                this.renderPreviousDayDataTable();
+                const file = e.target.files[0];
+                const result = await this.loadPreviousDayDataFromFile(file);
+
+                if (result.success) {
+                    // Обновляем информацию о файле
+                    previousDayFileInfo.innerHTML = `<i class="fas fa-check-circle" style="color: var(--success);"></i> ${file.name} (${result.count} ДТ, ${this.formatCurrency(result.total)})`;
+
+                    // Обновляем таблицу
+                    this.renderPreviousDayDataTable();
+
+                    // Обновляем индикатор
+                    this.updatePreviousDayIndicator();
+
+                    this.showNotification(result.message, 'success');
+                } else {
+                    this.showNotification(result.message, 'error');
+                }
+
+                // Сбрасываем input, чтобы можно было загрузить тот же файл повторно
+                e.target.value = '';
             }
         });
 
@@ -782,14 +804,6 @@ class App {
 
     // Открытие модального окна настроек сводных
     openSummarySettingsModal() {
-        // Загружаем данные предыдущего дня из localStorage (если currentSubdivisionData пуст)
-        if (Object.keys(this.debtManager.currentSubdivisionData).length === 0) {
-            const previousData = this.debtManager.getPreviousDayData();
-            if (Object.keys(previousData).length > 0) {
-                this.debtManager.currentSubdivisionData = previousData;
-            }
-        }
-
         // Заполняем поля сводных данных
         document.getElementById('summaryDtLegal').value = this.debtManager.summaryDT.legal || '';
         document.getElementById('summaryDtNotRecoverable').value = this.debtManager.summaryDT.notRecoverable || '';
@@ -801,7 +815,7 @@ class App {
         document.getElementById('summarySiuatNotRecoverable').value = this.debtManager.summarySIUAT.notRecoverable || '';
         document.getElementById('summarySiuatRecoverable').value = this.debtManager.summarySIUAT.recoverable || '';
 
-        // Заполняем таблицу данных предыдущего дня
+        // Заполняем таблицу данных предыдущего дня из localStorage
         this.renderPreviousDayDataTable();
 
         document.getElementById('summarySettingsModal').classList.add('active');
@@ -810,30 +824,76 @@ class App {
     // Отрисовка таблицы данных предыдущего дня
     renderPreviousDayDataTable() {
         const tbody = document.getElementById('previousDayDataBody');
-        const currentData = this.debtManager.currentSubdivisionData;
+        const statsEl = document.getElementById('previousDayStats');
+        const previousData = this.debtManager.getPreviousDayData();
 
-        if (Object.keys(currentData).length === 0) {
-            tbody.innerHTML = '<tr class="empty-row"><td colspan="2">Сначала выполните сверку</td></tr>';
+        if (Object.keys(previousData).length === 0) {
+            tbody.innerHTML = '<tr class="empty-row"><td colspan="2">Данные не загружены. Загрузите Excel файл.</td></tr>';
+            statsEl.style.display = 'none';
             return;
         }
 
-        // Получаем данные предыдущего дня
-        const previousData = this.debtManager.getPreviousDayData();
+        // Показываем статистику
+        statsEl.style.display = 'block';
+        const dtCount = Object.keys(previousData).length;
+        const totalAmount = Object.values(previousData).reduce((sum, val) => sum + val, 0);
 
+        document.getElementById('previousDayDtCount').textContent = dtCount;
+        document.getElementById('previousDayDtTotal').textContent = this.formatCurrency(totalAmount);
+
+        // Таблица — только для просмотра (данные из файла, не редактируемые)
         let html = '';
-        // Сортируем филиалы по названию
-        const sortedFilials = Object.keys(currentData).sort();
+        const sortedFilials = Object.keys(previousData).sort();
 
         sortedFilials.forEach(filial => {
-            const currentAmount = currentData[filial] || 0;
-            const previousAmount = previousData[filial] || 0;
+            const amount = previousData[filial] || 0;
             html += `<tr>
                 <td>${this.escapeHtml(filial)}</td>
-                <td><input type="number" step="0.01" class="prev-day-input" data-filial="${this.escapeHtml(filial)}" value="${previousAmount}"></td>
+                <td class="number-cell">${this.formatNumber(amount)}</td>
             </tr>`;
         });
 
         tbody.innerHTML = html;
+    }
+
+    // Форматирование валюты для отображения
+    formatCurrency(amount) {
+        return new Intl.NumberFormat('ru-RU', {
+            style: 'currency',
+            currency: 'RUB',
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(amount);
+    }
+
+    // Форматирование числа
+    formatNumber(num) {
+        return new Intl.NumberFormat('ru-RU', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(num);
+    }
+
+    // Очистка данных предыдущего дня
+    clearPreviousDayData() {
+        if (!confirm('Вы уверены, что хотите удалить все данные предыдущего дня?')) {
+            return;
+        }
+
+        const result = this.debtManager.clearPreviousDayData();
+
+        if (result.success) {
+            // Сбрасываем информацию о файле
+            document.getElementById('previousDayFileInfo').innerHTML = '<i class="fas fa-info-circle"></i> Файл не загружен';
+            document.getElementById('previousDayFileInput').value = '';
+
+            this.renderPreviousDayDataTable();
+            this.updatePreviousDayIndicator();
+
+            this.showNotification('Данные предыдущего дня очищены', 'success');
+        } else {
+            this.showNotification(result.message, 'error');
+        }
     }
 
     // Сохранение настроек сводных
@@ -854,23 +914,8 @@ class App {
             recoverable: parseFloat(document.getElementById('summarySiuatRecoverable').value) || 0
         };
 
-        // Сохраняем данные предыдущего дня из таблицы (единый ключ для ручных данных)
-        const inputs = document.querySelectorAll('.prev-day-input');
-        const previousDayData = {};
-        inputs.forEach(input => {
-            const filial = input.dataset.filial;
-            const value = parseFloat(input.value) || 0;
-            previousDayData[filial] = value;
-        });
-
-        // Сохраняем в localStorage под единым ключом
-        try {
-            localStorage.setItem('previousDayDebt_manual', JSON.stringify(previousDayData));
-        } catch (e) {
-            console.error('Ошибка сохранения данных предыдущего дня:', e);
-        }
-
-        // Сохраняем сводные данные
+        // Данные предыдущего дня сохраняются автоматически при загрузке из файла
+        // Здесь просто сохраняем сводные данные
         this.debtManager.saveSummaryData();
 
         // Закрываем модалку
