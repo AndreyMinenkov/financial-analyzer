@@ -284,7 +284,8 @@ class DebtReconciliationManager {
                     const subdivisionName = String(subdivision).trim();
                     const amountValue = this.parseExcelNumber(amount);
 
-                    if (subdivisionName && amountValue !== 0) {
+                    // Сохраняем все подразделения, включая с нулевой суммой
+                    if (subdivisionName) {
                         previousDayData[subdivisionName] = amountValue;
                         parsedCount++;
                         totalAmount += amountValue;
