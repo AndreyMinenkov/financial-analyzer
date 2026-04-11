@@ -1176,4 +1176,4 @@ def create_pivot_sheet_at_row(ws, headers, rows_data, title, start_row):
 
 if __name__ == '__main__':
     print("Сервер запущен. Для остановки нажми Ctrl+C\n")
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    app.run(debug=False, port=5000, host='0.0.0.0')
