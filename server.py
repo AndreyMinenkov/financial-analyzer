@@ -986,30 +986,17 @@ def extract_siuat_totals_by_max(ws):
     """Извлекает totalDebt и totalOverdue из листа СИ УАТ.
 
     Стратегия:
-    1. Ищем колонки по заголовкам с приоритетами
-    2. Ищем строку заголовков (где есть "Всего" и "Просрочено") — это граница основной таблицы
-    3. Ищем "ИТОГО" ПОСЛЕ строки заголовков (в основной таблице, не в сводной сверху)
-    4. Если не нашли — берём максимальные значения по строкам основной таблицы
+    1. Ищем строку "ИТОГО" только после 200-й строки
+    2. Берём данные из столбцов 12 (общая ДЗ) и 15 (ПДЗ)
+    3. Если не нашли "ИТОГО" — берём максимальные значения по строкам после 200
     """
-    total_col, overdue_col = find_siuat_columns(ws)
+    total_col = 12
+    overdue_col = 15
     print(f"  Используем колонки: всего={total_col}, просроченно={overdue_col}")
 
-    # Находим строку заголовков основной таблицы (где есть "Контрагент" или "Договор" в столбце 1)
-    # Это граница между верхней сводной таблицей и основной таблицей
-    header_row = None
-    for r in range(1, min(30, ws.max_row + 1)):
-        cell_val = ws.cell(row=r, column=1).value
-        if cell_val:
-            str_val = str(cell_val).strip().lower()
-            if 'контрагент' in str_val or 'договор' in str_val or 'филиал' in str_val:
-                header_row = r
-                print(f"  Найдена строка заголовков основной таблицы: строка {r} ('{cell_val}')")
-                break
-
-    # Ищем "ИТОГО" только ПОСЛЕ строки заголовков
+    # Ищем "ИТОГО" только после 200-й строки
     itogo_row = None
-    start_search = header_row if header_row else 1
-    for r in range(start_search, ws.max_row + 1):
+    for r in range(201, ws.max_row + 1):
         cell_val = get_cell_value(ws, r, 1)
         if cell_val:
             str_val = str(cell_val).strip().lower()
@@ -1018,23 +1005,23 @@ def extract_siuat_totals_by_max(ws):
                 print(f"  Найдена строка 'ИТОГО' на строке {r}")
                 break
 
-    # Если нашли "ИТОГО" — берём данные из неё
+    # Если нашли "ИТОГО" после 200-й строки — берём данные из неё
     if itogo_row:
         v_total = _parse_cell_number(get_cell_value(ws, itogo_row, total_col))
         v_overdue = _parse_cell_number(get_cell_value(ws, itogo_row, overdue_col))
         total_debt = round(v_total, 2)
         total_overdue = round(v_overdue, 2)
-        print(f"  Данные из строки 'ИТОГО': общая ДЗ={total_debt}, ПДЗ={total_overdue}")
+        print(f"  Данные из строки 'ИТОГО' (строка {itogo_row}): общая ДЗ={total_debt}, ПДЗ={total_overdue}")
 
         if total_debt > 0 and total_overdue > 0:
             return total_debt, total_overdue
 
-    # Если не нашли "ИТОГО" или данные = 0, ищем максимальные значения по строкам основной таблицы
-    print(f"  Ищем максимальные значения по строкам основной таблицы (начиная со строки {start_search})...")
+    # Если не нашли "ИТОГО" или данные = 0, ищем максимальные значения по строкам после 200
+    print(f"  Ищем максимальные значения по строкам после 200...")
     max_debt = 0
     max_overdue = 0
 
-    for r in range(start_search, ws.max_row + 1):
+    for r in range(201, ws.max_row + 1):
         v_total = _parse_cell_number(get_cell_value(ws, r, total_col))
         if v_total > max_debt:
             max_debt = v_total
@@ -1046,7 +1033,7 @@ def extract_siuat_totals_by_max(ws):
     total_debt = round(max_debt, 2)
     total_overdue = round(max_overdue, 2)
 
-    print(f"  Результат: общая ДЗ={total_debt} (col {total_col}), ПДЗ={total_overdue} (col {overdue_col})")
+    print(f"  Результат: общая ДЗ={total_debt}, ПДЗ={total_overdue}")
 
     return total_debt, total_overdue
 
