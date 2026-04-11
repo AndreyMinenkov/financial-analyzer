@@ -321,6 +321,14 @@
                             <button class="btn btn-success" id="exportReconciledBtn" disabled>
                                 <i class="fas fa-file-excel"></i> Сохранить
                             </button>
+                            <div id="saveProgressBar" style="display: none; margin-top: 8px; width: 100%; max-width: 400px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <div style="flex: 1; height: 6px; background: var(--border-light); border-radius: 3px; overflow: hidden;">
+                                        <div id="saveProgressFill" style="height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--success)); border-radius: 3px; transition: width 0.3s;"></div>
+                                    </div>
+                                    <span id="saveProgressText" style="font-size: 12px; color: var(--text-secondary); white-space: nowrap;">Обработка...</span>
+                                </div>
+                            </div>
                             <button class="btn btn-warning" id="saveCurrentDayBtn" disabled title="Сохранить данные текущего дня в localStorage для сравнения завтра">
                                 <i class="fas fa-save"></i> Сохранить данные дня
                             </button>

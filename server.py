@@ -520,7 +520,70 @@ def save_excel():
         print(f"Документов для обновления: {len(data['updatedDocuments'])}")
 
         wb = openpyxl.load_workbook(io.BytesIO(file.read()))
-        ws = wb.active
+
+        # ===== ШАГ 0: ПЕРЕИМЕНОВЫВАЕМ ВСЕ ЛИСТЫ СРАЗУ =====
+        # Это самая первая операция, чтобы избежать любых конфликтов имён
+        print("\n=== ШАГ 0: ПЕРЕИМЕНОВАНИЕ ЛИСТОВ ===")
+        original_main_ws = None
+        original_siuat_ws = None
+        original_summary_ws = None
+
+        # Собираем все листы в списки по типу
+        all_sheets = list(wb.sheetnames)
+        print(f"  Исходные листы: {all_sheets}")
+
+        # Определяем типы листов
+        sheets_to_rename = {}  # old_name -> new_name
+        sheets_to_delete = []
+
+        for sheet_name in all_sheets:
+            if sheet_name.startswith('Свод ДЗ СИ УАТ') or sheet_name.startswith('Свод ДЗ СИ'):
+                sheets_to_rename[sheet_name] = 'Свод ДЗ СИ УАТ'
+            elif 'Сводные' in sheet_name or 'Сводная' in sheet_name:
+                sheets_to_rename[sheet_name] = 'Сводные таблицы'
+            else:
+                # Это главный лист (или другие листы)
+                # Проверяем, содержит ли данные ДЗ
+                test_ws = wb[sheet_name]
+                is_main = False
+                for r in range(1, min(30, test_ws.max_row + 1)):
+                    cell_val = test_ws.cell(row=r, column=1).value
+                    if cell_val and str(cell_val).strip().startswith('ДТ '):
+                        is_main = True
+                        break
+
+                if is_main:
+                    sheets_to_rename[sheet_name] = 'Свод ДЗ'
+                else:
+                    # Это какой-то другой лист - удаляем если начинается с "Свод"
+                    if sheet_name.startswith('Свод'):
+                        sheets_to_delete.append(sheet_name)
+
+        # Сначала удаляем ненужные листы
+        for sn in sheets_to_delete:
+            del wb[sn]
+            print(f"  Удалён лишний лист: {sn}")
+
+        # Теперь переименовываем
+        # Сначала переименовываем НЕ главные, чтобы избежать конфликтов
+        for old_name, new_name in sheets_to_rename.items():
+            if new_name != 'Свод ДЗ' and old_name != new_name and old_name in wb.sheetnames:
+                wb[old_name].title = new_name
+                print(f"  Переименован: '{old_name}' → '{new_name}'")
+
+        # Переименовываем главный лист
+        for old_name, new_name in sheets_to_rename.items():
+            if new_name == 'Свод ДЗ' and old_name != new_name and old_name in wb.sheetnames:
+                wb[old_name].title = new_name
+                print(f"  Переименован: '{old_name}' → '{new_name}'")
+
+        print(f"  Листы после переименования: {wb.sheetnames}")
+        print("=== ПЕРЕИМЕНОВАНИЕ ЗАВЕРШЕНО ===\n")
+
+        # Теперь ws должен быть переименован в "Свод ДЗ"
+        # Получаем правильный ws
+        ws = wb['Свод ДЗ']
+        wb._active_sheet_index = wb.sheetnames.index('Свод ДЗ')
 
         today = datetime.now().date()
         print(f"Текущая дата: {today}")
@@ -671,113 +734,6 @@ def save_excel():
         except Exception as e:
             print(f"!!! Ошибка: {e}")
             traceback.print_exc()
-
-        # ===== ПЕРЕИМЕНОВЫВАЕМ ВСЕ ЛИСТЫ (САМАЯ ПОСЛЕДНЯЯ ОПЕРАЦИЯ) =====
-        print("\n=== ПЕРЕИМЕНОВАНИЕ ЛИСТОВ (ФИНАЛЬНЫЙ ШАГ) ===")
-        print(f"  Текущие листы: {wb.sheetnames}")
-
-        # Шаг 1: Определяем, какой лист является главным (данные ДЗ)
-        # Главный лист - тот, с которым мы работали (изначально active)
-        main_sheet_name = None
-        siuat_sheet_name = None
-        summary_sheet_name = 'Сводные таблицы'  # Этот лист мы только что создали
-
-        # Ищем листы по именам
-        for sheet_name in wb.sheetnames:
-            if sheet_name.startswith('Свод ДЗ СИ УАТ') or sheet_name.startswith('Свод ДЗ СИ'):
-                siuat_sheet_name = sheet_name
-            elif 'Сводные' in sheet_name or 'Сводная' in sheet_name:
-                summary_sheet_name = sheet_name
-
-        # Главный лист - это тот, который НЕ СИ УАТ и НЕ Сводные таблицы
-        # и содержит данные ДЗ (с филиалами "ДТ ")
-        for sheet_name in wb.sheetnames:
-            if sheet_name != siuat_sheet_name and sheet_name != summary_sheet_name:
-                # Проверяем, содержит ли этот лист данные ДЗ
-                test_ws = wb[sheet_name]
-                for r in range(1, min(20, test_ws.max_row + 1)):
-                    cell_val = test_ws.cell(row=r, column=1).value
-                    if cell_val and str(cell_val).strip().startswith('ДТ '):
-                        main_sheet_name = sheet_name
-                        break
-                if main_sheet_name:
-                    break
-
-        # Если главный лист не найден по содержимому, берём первый (не сводные и не СИ УАТ)
-        if not main_sheet_name:
-            for sheet_name in wb.sheetnames:
-                if sheet_name != siuat_sheet_name and sheet_name != summary_sheet_name:
-                    main_sheet_name = sheet_name
-                    break
-
-        # Если всё ещё не найден - берём первый лист
-        if not main_sheet_name:
-            main_sheet_name = wb.sheetnames[0]
-
-        # Если лист СИ УАТ не найден по имени, ищем по содержимому (если он не главный и не сводные)
-        if not siuat_sheet_name:
-            for sheet_name in wb.sheetnames:
-                if sheet_name != main_sheet_name and sheet_name != summary_sheet_name:
-                    # Проверяем, содержит ли лист СИ УАТ данные
-                    test_ws = wb[sheet_name]
-                    # Если это второй лист (после главного) и не сводные - это СИ УАТ
-                    siuat_sheet_name = sheet_name
-                    break
-
-        # Если лист СИ УАТ всё ещё не найден, возможно он не был загружен
-        if not siuat_sheet_name:
-            print("  Лист СИ УАТ не найден (возможно, файл не был загружен)")
-
-        print(f"  Главный лист: '{main_sheet_name}'")
-        print(f"  Лист СИ УАТ: '{siuat_sheet_name}'")
-        print(f"  Лист Сводные таблицы: '{summary_sheet_name}'")
-
-        # Шаг 2: Переименовываем ПОСЛЕДОВАТЕЛЬНО
-        # Сначала удаляем ВСЕ листы, которые НЕ нужны (чтобы избежать конфликтов)
-        # Оставляем только: главный, СИ УАТ (если есть), Сводные таблицы
-
-        sheets_to_keep = {main_sheet_name, summary_sheet_name}
-        if siuat_sheet_name:
-            sheets_to_keep.add(siuat_sheet_name)
-
-        # Удаляем все листы, которые:
-        # - начинаются с "Свод ДЗ" (но не являются главным или СИ УАТ)
-        # - начинаются с "Сводные" (но не являются нашими сводными таблицами)
-        sheets_to_delete = []
-        for sheet_name in wb.sheetnames:
-            if sheet_name not in sheets_to_keep:
-                if sheet_name.startswith('Свод ДЗ') or sheet_name.startswith('Сводные'):
-                    sheets_to_delete.append(sheet_name)
-
-        print(f"  Листы для удаления: {sheets_to_delete}")
-        for sn in sheets_to_delete:
-            del wb[sn]
-            print(f"  Удалён лист: {sn}")
-
-        # Теперь переименовываем оставшиеся листы
-
-        # 1. Переименовываем Сводные таблицы (если имя изменилось)
-        if summary_sheet_name != 'Сводные таблицы':
-            wb[summary_sheet_name].title = 'Сводные таблицы'
-            print(f"  Переименован лист в 'Сводные таблицы'")
-
-        # 2. Переименовываем СИ УАТ (если есть и имя изменилось)
-        if siuat_sheet_name and siuat_sheet_name in wb.sheetnames and siuat_sheet_name != 'Свод ДЗ СИ УАТ':
-            wb[siuat_sheet_name].title = 'Свод ДЗ СИ УАТ'
-            print(f"  Переименован лист в 'Свод ДЗ СИ УАТ'")
-        elif siuat_sheet_name and siuat_sheet_name not in wb.sheetnames:
-            # Лист СИ УАТ был удалён (например, если он назывался "Свод ДЗ1" и т.п.)
-            print(f"  Лист СИ УАТ '{siuat_sheet_name}' не найден после удаления")
-
-        # 3. Переименовываем главный лист (ПОСЛЕДНИМ)
-        if main_sheet_name in wb.sheetnames and main_sheet_name != 'Свод ДЗ':
-            wb[main_sheet_name].title = 'Свод ДЗ'
-            print(f"  Переименован главный лист в 'Свод ДЗ'")
-        elif main_sheet_name not in wb.sheetnames:
-            print(f"  ОШИБКА: Главный лист '{main_sheet_name}' не найден!")
-
-        print(f"  Итоговые листы: {wb.sheetnames}")
-        print("=== ПЕРЕИМЕНОВАНИЕ ЛИСТОВ ЗАВЕРШЕНО ===\n")
 
         # Сохраняем результат
         output = io.BytesIO()
@@ -947,23 +903,50 @@ def find_siuat_columns(ws):
 
 
 def extract_siuat_totals_by_max(ws):
-    """Извлекает totalDebt и totalOverdue из листа СИ УАТ по максимальным значениям в столбцах 12 и 15."""
-    total_col = 12  # L - общая задолженность
-    overdue_col = 15  # O - просроченная задолженность
+    """Извлекает totalDebt и totalOverdue из листа СИ УАТ.
+    
+    Стратегия:
+    1. Сначала ищем колонки по заголовкам (гибкий поиск)
+    2. Если не нашли - используем столбцы 12 и 15
+    3. Ищем строку "ИТОГО" и берём данные из неё
+    4. Если не нашли "ИТОГО" - берём максимальные значения по всем строкам
+    """
+    # Попытка 1: Найти колонки по заголовкам
+    total_col, overdue_col = find_siuat_columns(ws)
+    print(f"  Используем колонки: всего={total_col}, просроченно={overdue_col}")
 
+    # Попытка 2: Найти строку "ИТОГО"
+    itogo_row = None
+    for r in range(1, ws.max_row + 1):
+        cell_val = get_cell_value(ws, r, 1)
+        if cell_val:
+            str_val = str(cell_val).strip().lower()
+            if 'итог' in str_val:
+                itogo_row = r
+                print(f"  Найдена строка 'ИТОГО' на строке {r}")
+                break
+
+    # Если нашли "ИТОГО" - берём данные из неё
+    if itogo_row:
+        v_total = get_cell_value(ws, itogo_row, total_col)
+        v_overdue = get_cell_value(ws, itogo_row, overdue_col)
+        total_debt = round(v_total, 2) if isinstance(v_total, (int, float)) else 0
+        total_overdue = round(v_overdue, 2) if isinstance(v_overdue, (int, float)) else 0
+        print(f"  Данные из строки 'ИТОГО': общая ДЗ={total_debt}, ПДЗ={total_overdue}")
+
+        if total_debt > 0 and total_overdue > 0:
+            return total_debt, total_overdue
+
+    # Попытка 3: Если не нашли "ИТОГО" или данные = 0, ищем максимальные значения
+    print(f"  Ищем максимальные значения по всем строкам...")
     max_debt = 0
     max_overdue = 0
 
-    print(f"  Поиск максимальных значений (колонки: всего={total_col}, просроченно={overdue_col})...")
-
-    # Проходим по всем строкам и ищем максимальные значения
     for r in range(1, ws.max_row + 1):
-        # Проверяем значение в колонке общей задолженности
         v_total = get_cell_value(ws, r, total_col)
         if isinstance(v_total, (int, float)) and v_total > max_debt:
             max_debt = v_total
 
-        # Проверяем значение в колонке просрочки
         v_overdue = get_cell_value(ws, r, overdue_col)
         if isinstance(v_overdue, (int, float)) and v_overdue > max_overdue:
             max_overdue = v_overdue
@@ -971,7 +954,7 @@ def extract_siuat_totals_by_max(ws):
     total_debt = round(max_debt, 2)
     total_overdue = round(max_overdue, 2)
 
-    print(f"  СИ УАТ максимумы: общая ДЗ={total_debt} (col {total_col}), ПДЗ={total_overdue} (col {overdue_col})")
+    print(f"  Результат: общая ДЗ={total_debt} (col {total_col}), ПДЗ={total_overdue} (col {overdue_col})")
 
     return total_debt, total_overdue
 

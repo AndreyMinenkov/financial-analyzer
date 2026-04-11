@@ -670,10 +670,42 @@ class App {
     }
 
     async exportReconciledFile() {
+        const progressBar = document.getElementById('saveProgressBar');
+        const progressFill = document.getElementById('saveProgressFill');
+        const progressText = document.getElementById('saveProgressText');
+        const exportBtn = document.getElementById('exportReconciledBtn');
+
         try {
-            this.showNotification('Выполняется сохранение...', 'info');
-            
+            // Показываем прогресс-бар
+            progressBar.style.display = 'block';
+            exportBtn.disabled = true;
+            progressFill.style.width = '10%';
+            progressText.textContent = 'Подготовка данных...';
+
+            // Анимация прогресса
+            let progress = 10;
+            const progressInterval = setInterval(() => {
+                if (progress < 80) {
+                    progress += Math.random() * 15;
+                    if (progress > 80) progress = 80;
+                    progressFill.style.width = progress + '%';
+                    if (progress < 40) {
+                        progressText.textContent = 'Обработка документов...';
+                    } else if (progress < 60) {
+                        progressText.textContent = 'Формирование отчёта...';
+                    } else {
+                        progressText.textContent = 'Создание файлов...';
+                    }
+                }
+            }, 500);
+
             const result = await this.debtManager.exportToExcel();
+
+            // Останавливаем анимацию
+            clearInterval(progressInterval);
+            progressFill.style.width = '100%';
+            progressText.textContent = 'Готово!';
+
             if (result.success) {
                 this.showNotification(result.message, 'success');
             } else if (result.message) {
@@ -682,6 +714,13 @@ class App {
         } catch (error) {
             console.error('Ошибка при экспорте:', error);
             this.showNotification('Ошибка при сохранении файла', 'error');
+        } finally {
+            // Скрываем прогресс-бар через небольшую задержку
+            setTimeout(() => {
+                progressBar.style.display = 'none';
+                progressFill.style.width = '0%';
+                exportBtn.disabled = false;
+            }, 1500);
         }
     }
 
