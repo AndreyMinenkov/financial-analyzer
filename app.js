@@ -410,6 +410,23 @@ class App {
             this.saveSummarySettings();
         });
 
+        // Загрузка данных предыдущего дня из Excel файла
+        const loadPreviousDayFileBtn = document.getElementById('loadPreviousDayFileBtn');
+        const previousDayFileInput = document.getElementById('previousDayFileInput');
+        const previousDayFileInfo = document.getElementById('previousDayFileInfo');
+
+        loadPreviousDayFileBtn.addEventListener('click', () => {
+            previousDayFileInput.click();
+        });
+
+        previousDayFileInput.addEventListener('change', async (e) => {
+            if (e.target.files.length > 0) {
+                await this.loadPreviousDayDataFromFile(e.target.files[0]);
+                // Обновляем таблицу после загрузки
+                this.renderPreviousDayDataTable();
+            }
+        });
+
         // Загрузка файла СИ УАТ
         const selectSiUatBtn = document.getElementById('selectSiUatBtn');
         const siUatFileInput = document.getElementById('siUatFile');
@@ -701,13 +718,46 @@ class App {
         }
     }
 
+    // Загрузка данных предыдущего дня из Excel файла
+    async loadPreviousDayDataFromFile(file) {
+        this.showLoading();
+        try {
+            const result = await this.debtManager.loadPreviousDayDataFromFile(file);
+            const fileInfoEl = document.getElementById('previousDayFileInfo');
+
+            if (result.success) {
+                fileInfoEl.innerHTML =
+                    `<i class="fas fa-check-circle" style="color: var(--success);"></i> ${file.name}`;
+                this.showNotification(result.message, 'success');
+            } else {
+                fileInfoEl.innerHTML =
+                    `<i class="fas fa-exclamation-circle" style="color: var(--danger);"></i> ${result.message}`;
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            this.showNotification('Ошибка загрузки файла: ' + error.message, 'error');
+        } finally {
+            this.hideLoading();
+        }
+    }
+
     // Открытие модального окна настроек сводных
     openSummarySettingsModal() {
+        // Загружаем данные предыдущего дня из localStorage (если currentSubdivisionData пуст)
+        if (Object.keys(this.debtManager.currentSubdivisionData).length === 0) {
+            const previousData = this.debtManager.getPreviousDayData();
+            if (Object.keys(previousData).length > 0) {
+                this.debtManager.currentSubdivisionData = previousData;
+            }
+        }
+
         // Заполняем поля сводных данных
         document.getElementById('summaryDtLegal').value = this.debtManager.summaryDT.legal || '';
         document.getElementById('summaryDtNotRecoverable').value = this.debtManager.summaryDT.notRecoverable || '';
         document.getElementById('summaryDtRecoverable').value = this.debtManager.summaryDT.recoverable || '';
 
+        document.getElementById('summarySiuatTotalDebt').value = this.debtManager.summarySIUAT.totalDebt || '';
+        document.getElementById('summarySiuatTotalOverdue').value = this.debtManager.summarySIUAT.totalOverdue || '';
         document.getElementById('summarySiuatLegal').value = this.debtManager.summarySIUAT.legal || '';
         document.getElementById('summarySiuatNotRecoverable').value = this.debtManager.summarySIUAT.notRecoverable || '';
         document.getElementById('summarySiuatRecoverable').value = this.debtManager.summarySIUAT.recoverable || '';
@@ -758,6 +808,8 @@ class App {
 
         // Сохраняем сводные данные СИ УАТ
         this.debtManager.summarySIUAT = {
+            totalDebt: parseFloat(document.getElementById('summarySiuatTotalDebt').value) || 0,
+            totalOverdue: parseFloat(document.getElementById('summarySiuatTotalOverdue').value) || 0,
             legal: parseFloat(document.getElementById('summarySiuatLegal').value) || 0,
             notRecoverable: parseFloat(document.getElementById('summarySiuatNotRecoverable').value) || 0,
             recoverable: parseFloat(document.getElementById('summarySiuatRecoverable').value) || 0

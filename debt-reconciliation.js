@@ -19,6 +19,8 @@ class DebtReconciliationManager {
             recoverable: 0
         };
         this.summarySIUAT = {          // свод задолженности СИ УАТ
+            totalDebt: 0,
+            totalOverdue: 0,
             legal: 0,
             notRecoverable: 0,
             recoverable: 0
@@ -86,7 +88,15 @@ class DebtReconciliationManager {
             }
             const siuatData = localStorage.getItem('summarySIUAT');
             if (siuatData) {
-                this.summarySIUAT = JSON.parse(siuatData);
+                const parsed = JSON.parse(siuatData);
+                // Объединяем с дефолтными значениями для новых полей
+                this.summarySIUAT = {
+                    totalDebt: parsed.totalDebt || 0,
+                    totalOverdue: parsed.totalOverdue || 0,
+                    legal: parsed.legal || 0,
+                    notRecoverable: parsed.notRecoverable || 0,
+                    recoverable: parsed.recoverable || 0
+                };
             }
         } catch (e) {
             console.error('Ошибка загрузки сводных данных:', e);
@@ -225,6 +235,87 @@ class DebtReconciliationManager {
                 success: false,
                 message: 'Ошибка загрузки файла СИ УАТ: ' + error.message
             };
+        }
+    }
+
+    // Загрузка данных предыдущего дня из Excel файла
+    async loadPreviousDayDataFromFile(file) {
+        console.log('Загрузка данных предыдущего дня из файла:', file.name);
+        try {
+            const arrayBuffer = await this.readFileAsArrayBuffer(file);
+            const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true, raw: true });
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null, raw: true });
+
+            if (rows.length < 2) {
+                return { success: false, message: 'Файл не содержит данных (минимум 2 строки: заголовок + данные)' };
+            }
+
+            const headers = rows[0] || [];
+            console.log('Заголовки:', headers);
+
+            // Ищем колонки "Подразделение" и "Сумма ПДЗ"
+            const subdivisionCol = this.findColumnIndex(headers, 'Подразделение');
+            const amountCol = this.findColumnIndex(headers, 'Сумма ПДЗ');
+
+            if (subdivisionCol === -1) {
+                return { success: false, message: 'Не найдена колонка "Подразделение". Заголовки: ' + headers.join(', ') };
+            }
+            if (amountCol === -1) {
+                return { success: false, message: 'Не найдена колонка "Сумма ПДЗ". Заголовки: ' + headers.join(', ') };
+            }
+
+            console.log(`Найдены колонки: Подразделение=${subdivisionCol + 1}, Сумма ПДЗ=${amountCol + 1}`);
+
+            // Парсим данные
+            const previousDayData = {};
+            let parsedCount = 0;
+
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                if (!row || row.length === 0) continue;
+
+                const subdivision = row[subdivisionCol];
+                const amount = row[amountCol];
+
+                if (subdivision && amount !== undefined && amount !== null) {
+                    const subdivisionName = String(subdivision).trim();
+                    const amountValue = this.parseExcelNumber(amount);
+
+                    if (subdivisionName && amountValue !== 0) {
+                        previousDayData[subdivisionName] = amountValue;
+                        parsedCount++;
+                    }
+                }
+            }
+
+            if (parsedCount === 0) {
+                return { success: false, message: 'Не найдено данных для загрузки' };
+            }
+
+            // Сохраняем в localStorage как данные предыдущего дня
+            try {
+                localStorage.setItem('previousDayDebt_manual', JSON.stringify(previousDayData));
+                console.log('Данные предыдущего дня сохранены в localStorage:', previousDayData);
+            } catch (e) {
+                console.error('Ошибка сохранения в localStorage:', e);
+                return { success: false, message: 'Ошибка сохранения данных: ' + e.message };
+            }
+
+            // Обновляем currentSubdivisionData для отображения в таблице настроек
+            this.currentSubdivisionData = previousDayData;
+
+            console.log(`Загружено ${parsedCount} записей:`, previousDayData);
+
+            return {
+                success: true,
+                message: `Загружено ${parsedCount} записей из файла`,
+                data: previousDayData
+            };
+        } catch (error) {
+            console.error('Ошибка загрузки файла:', error);
+            return { success: false, message: 'Ошибка загрузки файла: ' + error.message };
         }
     }
 
@@ -826,6 +917,8 @@ class DebtReconciliationManager {
                 },
                 // Свод задолженности СИ УАТ
                 summarySIUAT: {
+                    totalDebt: this.summarySIUAT.totalDebt || 0,
+                    totalOverdue: this.summarySIUAT.totalOverdue || 0,
                     legal: this.summarySIUAT.legal,
                     notRecoverable: this.summarySIUAT.notRecoverable,
                     recoverable: this.summarySIUAT.recoverable

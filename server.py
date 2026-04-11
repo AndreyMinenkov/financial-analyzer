@@ -570,11 +570,7 @@ def save_excel():
 
         align_numeric_cells(ws)
 
-        # ===== 1. ПЕРЕИМЕНОВЫВАЕМ ГЛАВНЫЙ ЛИСТ =====
-        ws.title = 'Свод ДЗ'
-        print(f"\nГлавный лист переименован в 'Свод ДЗ'")
-
-        # ===== 2. ИЗВЛЕКАЕМ ДАННЫЕ ИЗ ИТОГОВОГО ФАЙЛА =====
+        # ===== ИЗВЛЕКАЕМ ДАННЫЕ ИЗ ГЛАВНОГО ЛИСТА (до переименования) =====
         current_day_data_from_file = extract_filial_overdue(ws)
         data['currentDayData'] = current_day_data_from_file
         total_debt_data = extract_total_row_debt(ws, total_row)
@@ -584,54 +580,85 @@ def save_excel():
         siuat_file = request.files.get('siUatFile')
         siuat_total_debt = 0
         siuat_total_overdue = 0
+        siuat_sheet_created = False
+
+        print(f"\n=== ОТЛАДКА СИ УАТ ===")
+        print(f"  siuat_file: {siuat_file}")
+        print(f"  siuat_file.filename: {siuat_file.filename if siuat_file else 'None'}")
+        print(f"  request.files keys: {list(request.files.keys())}")
+
+        # Проверяем, переданы ли значения с фронтенда
+        summary_siuat = data.get('summarySIUAT', {})
+        print(f"  summarySIUAT с фронтенда: {summary_siuat}")
+        if summary_siuat:
+            siuat_total_debt = summary_siuat.get('totalDebt', 0) or 0
+            siuat_total_overdue = summary_siuat.get('totalOverdue', 0) or 0
+            print(f"  Получены данные СИ УАТ с фронтенда: общая ДЗ={siuat_total_debt}, ПДЗ={siuat_total_overdue}")
+
         if siuat_file and siuat_file.filename:
             print(f"\n=== ДОБАВЛЯЕМ ЛИСТ 'Свод ДЗ СИ УАТ' из файла {siuat_file.filename} ===")
             try:
                 # Удаляем все существующие листы «Свод ДЗ СИ УАТ*»
-                for sheet_name in list(wb.sheetnames):
-                    if sheet_name.startswith('Свод ДЗ СИ УАТ'):
-                        del wb[sheet_name]
-                        print(f"  Удалён лист: {sheet_name}")
+                sheets_to_delete = [sn for sn in wb.sheetnames if sn.startswith('Свод ДЗ СИ УАТ')]
+                for sheet_name in sheets_to_delete:
+                    del wb[sheet_name]
+                    print(f"  Удалён лист: {sheet_name}")
 
-                siuat_wb = openpyxl.load_workbook(io.BytesIO(siuat_file.read()))
+                # Читаем файл СИ УАТ
+                siuat_file_content = siuat_file.read()
+                print(f"  Размер файла СИ УАТ: {len(siuat_file_content)} байт")
+
+                siuat_wb = openpyxl.load_workbook(io.BytesIO(siuat_file_content))
                 print(f"  Листы в файле СИ УАТ: {siuat_wb.sheetnames}")
 
                 # Берём первый лист как источник
                 siuat_ws = siuat_wb.worksheets[0]
                 print(f"  Используем лист: '{siuat_ws.title}'")
+                print(f"  Размер листа: {siuat_ws.max_row} строк, {siuat_ws.max_column} колонок")
 
+                # Копируем лист
                 new_siuat_ws = copy_worksheet_full(siuat_ws, wb)
                 new_siuat_ws.title = 'Свод ДЗ СИ УАТ'
-                print(f"Лист переименован в 'Свод ДЗ СИ УАТ', все листы: {wb.sheetnames}")
+                siuat_sheet_created = True
+                print(f"  Лист скопирован и переименован в 'Свод ДЗ СИ УАТ'")
+                print(f"  Все листы в wb: {wb.sheetnames}")
 
-                # Извлекаем суммы из строки "Итого" на листе СИ УАТ
-                for r in range(1, new_siuat_ws.max_row + 1):
-                    cell_val = get_cell_value(new_siuat_ws, r, 1)
-                    if cell_val and 'Итого' in str(cell_val):
-                        v_l = get_cell_value(new_siuat_ws, r, COLUMNS['DEBT_AMOUNT'])
-                        v_o = get_cell_value(new_siuat_ws, r, COLUMNS['OVERDUE'])
-                        siuat_total_debt = round(v_l, 2) if isinstance(v_l, (int, float)) else 0
-                        siuat_total_overdue = round(v_o, 2) if isinstance(v_o, (int, float)) else 0
-                        print(f"СИ УАТ из строки {r}: общая ДЗ={siuat_total_debt}, ПДЗ={siuat_total_overdue}")
-                        break
+                # Отладка: проверяем данные в столбцах 12 и 15
+                print(f"  ОТЛАДКА: проверяем столбцы 12 и 15 в новом листе...")
+                for r in range(1, min(10, new_siuat_ws.max_row + 1)):
+                    v12 = new_siuat_ws.cell(row=r, column=12).value
+                    v15 = new_siuat_ws.cell(row=r, column=15).value
+                    name = new_siuat_ws.cell(row=r, column=1).value
+                    print(f"    Строка {r} ({name}): col12={v12}, col15={v15}")
+
+                # Извлекаем суммы из листа СИ УАТ динамически (максимум в столбцах 12 и 15)
+                # Используем только если с фронтенда не пришли данные (равны 0)
+                if siuat_total_debt == 0:
+                    print(f"  Вызываем extract_siuat_totals_by_max...")
+                    file_debt, file_overdue = extract_siuat_totals_by_max(new_siuat_ws)
+                    if file_debt > 0:
+                        siuat_total_debt = file_debt
+                        siuat_total_overdue = file_overdue
+                        print(f"  Используем данные из файла: общая ДЗ={siuat_total_debt}, ПДЗ={siuat_total_overdue}")
+                    else:
+                        print(f"  ВНИМАНИЕ: extract_siuat_totals_by_max вернул 0!")
                 else:
-                    for r in range(new_siuat_ws.max_row, 0, -1):
-                        val = get_cell_value(new_siuat_ws, r, COLUMNS['DEBT_AMOUNT'])
-                        if isinstance(val, (int, float)) and val > 0:
-                            siuat_total_debt = round(val, 2)
-                            v_o = get_cell_value(new_siuat_ws, r, COLUMNS['OVERDUE'])
-                            siuat_total_overdue = round(v_o, 2) if isinstance(v_o, (int, float)) else 0
-                            print(f"Fallback строка {r}: общая ДЗ={siuat_total_debt}, ПДЗ={siuat_total_overdue}")
-                            break
+                    print(f"  Используем данные с фронтенда, файл не сканируем")
             except Exception as e:
                 print(f"!!! Ошибка при добавлении листа СИ УАТ: {e}")
                 traceback.print_exc()
         else:
-            print("Файл СИ УАТ не загружен")
+            print("  Файл СИ УАТ не загружен (siuat_file=None или filename пустой)")
+            print(f"  siuat_total_debt = {siuat_total_debt}, siuat_total_overdue = {siuat_total_overdue}")
 
         # ===== 4. СОЗДАЁМ ЛИСТ «Сводные таблицы» =====
         print("\n=== СОЗДАЁМ ЛИСТ 'Сводные таблицы' ===")
         try:
+            # Удаляем существующий лист, если он есть
+            if 'Сводные таблицы' in wb.sheetnames:
+                del wb['Сводные таблицы']
+                print("  Удалён существующий лист 'Сводные таблицы'")
+
             summary_ws = wb.create_sheet('Сводные таблицы')
             create_summary_sheet(
                 summary_ws, data,
@@ -644,6 +671,113 @@ def save_excel():
         except Exception as e:
             print(f"!!! Ошибка: {e}")
             traceback.print_exc()
+
+        # ===== ПЕРЕИМЕНОВЫВАЕМ ВСЕ ЛИСТЫ (САМАЯ ПОСЛЕДНЯЯ ОПЕРАЦИЯ) =====
+        print("\n=== ПЕРЕИМЕНОВАНИЕ ЛИСТОВ (ФИНАЛЬНЫЙ ШАГ) ===")
+        print(f"  Текущие листы: {wb.sheetnames}")
+
+        # Шаг 1: Определяем, какой лист является главным (данные ДЗ)
+        # Главный лист - тот, с которым мы работали (изначально active)
+        main_sheet_name = None
+        siuat_sheet_name = None
+        summary_sheet_name = 'Сводные таблицы'  # Этот лист мы только что создали
+
+        # Ищем листы по именам
+        for sheet_name in wb.sheetnames:
+            if sheet_name.startswith('Свод ДЗ СИ УАТ') or sheet_name.startswith('Свод ДЗ СИ'):
+                siuat_sheet_name = sheet_name
+            elif 'Сводные' in sheet_name or 'Сводная' in sheet_name:
+                summary_sheet_name = sheet_name
+
+        # Главный лист - это тот, который НЕ СИ УАТ и НЕ Сводные таблицы
+        # и содержит данные ДЗ (с филиалами "ДТ ")
+        for sheet_name in wb.sheetnames:
+            if sheet_name != siuat_sheet_name and sheet_name != summary_sheet_name:
+                # Проверяем, содержит ли этот лист данные ДЗ
+                test_ws = wb[sheet_name]
+                for r in range(1, min(20, test_ws.max_row + 1)):
+                    cell_val = test_ws.cell(row=r, column=1).value
+                    if cell_val and str(cell_val).strip().startswith('ДТ '):
+                        main_sheet_name = sheet_name
+                        break
+                if main_sheet_name:
+                    break
+
+        # Если главный лист не найден по содержимому, берём первый (не сводные и не СИ УАТ)
+        if not main_sheet_name:
+            for sheet_name in wb.sheetnames:
+                if sheet_name != siuat_sheet_name and sheet_name != summary_sheet_name:
+                    main_sheet_name = sheet_name
+                    break
+
+        # Если всё ещё не найден - берём первый лист
+        if not main_sheet_name:
+            main_sheet_name = wb.sheetnames[0]
+
+        # Если лист СИ УАТ не найден по имени, ищем по содержимому (если он не главный и не сводные)
+        if not siuat_sheet_name:
+            for sheet_name in wb.sheetnames:
+                if sheet_name != main_sheet_name and sheet_name != summary_sheet_name:
+                    # Проверяем, содержит ли лист СИ УАТ данные
+                    test_ws = wb[sheet_name]
+                    # Если это второй лист (после главного) и не сводные - это СИ УАТ
+                    siuat_sheet_name = sheet_name
+                    break
+
+        # Если лист СИ УАТ всё ещё не найден, возможно он не был загружен
+        if not siuat_sheet_name:
+            print("  Лист СИ УАТ не найден (возможно, файл не был загружен)")
+
+        print(f"  Главный лист: '{main_sheet_name}'")
+        print(f"  Лист СИ УАТ: '{siuat_sheet_name}'")
+        print(f"  Лист Сводные таблицы: '{summary_sheet_name}'")
+
+        # Шаг 2: Переименовываем ПОСЛЕДОВАТЕЛЬНО
+        # Сначала удаляем ВСЕ листы, которые НЕ нужны (чтобы избежать конфликтов)
+        # Оставляем только: главный, СИ УАТ (если есть), Сводные таблицы
+
+        sheets_to_keep = {main_sheet_name, summary_sheet_name}
+        if siuat_sheet_name:
+            sheets_to_keep.add(siuat_sheet_name)
+
+        # Удаляем все листы, которые:
+        # - начинаются с "Свод ДЗ" (но не являются главным или СИ УАТ)
+        # - начинаются с "Сводные" (но не являются нашими сводными таблицами)
+        sheets_to_delete = []
+        for sheet_name in wb.sheetnames:
+            if sheet_name not in sheets_to_keep:
+                if sheet_name.startswith('Свод ДЗ') or sheet_name.startswith('Сводные'):
+                    sheets_to_delete.append(sheet_name)
+
+        print(f"  Листы для удаления: {sheets_to_delete}")
+        for sn in sheets_to_delete:
+            del wb[sn]
+            print(f"  Удалён лист: {sn}")
+
+        # Теперь переименовываем оставшиеся листы
+
+        # 1. Переименовываем Сводные таблицы (если имя изменилось)
+        if summary_sheet_name != 'Сводные таблицы':
+            wb[summary_sheet_name].title = 'Сводные таблицы'
+            print(f"  Переименован лист в 'Сводные таблицы'")
+
+        # 2. Переименовываем СИ УАТ (если есть и имя изменилось)
+        if siuat_sheet_name and siuat_sheet_name in wb.sheetnames and siuat_sheet_name != 'Свод ДЗ СИ УАТ':
+            wb[siuat_sheet_name].title = 'Свод ДЗ СИ УАТ'
+            print(f"  Переименован лист в 'Свод ДЗ СИ УАТ'")
+        elif siuat_sheet_name and siuat_sheet_name not in wb.sheetnames:
+            # Лист СИ УАТ был удалён (например, если он назывался "Свод ДЗ1" и т.п.)
+            print(f"  Лист СИ УАТ '{siuat_sheet_name}' не найден после удаления")
+
+        # 3. Переименовываем главный лист (ПОСЛЕДНИМ)
+        if main_sheet_name in wb.sheetnames and main_sheet_name != 'Свод ДЗ':
+            wb[main_sheet_name].title = 'Свод ДЗ'
+            print(f"  Переименован главный лист в 'Свод ДЗ'")
+        elif main_sheet_name not in wb.sheetnames:
+            print(f"  ОШИБКА: Главный лист '{main_sheet_name}' не найден!")
+
+        print(f"  Итоговые листы: {wb.sheetnames}")
+        print("=== ПЕРЕИМЕНОВАНИЕ ЛИСТОВ ЗАВЕРШЕНО ===\n")
 
         # Сохраняем результат
         output = io.BytesIO()
@@ -769,6 +903,115 @@ def extract_filial_overdue(ws):
     print(f"\n=== ДАННЫЕ ФИЛИАЛОВ ===")
     for f, a in sorted(data.items()): print(f"  {f}: {a:,.2f}")
     return data
+
+
+def find_siuat_columns(ws):
+    """Находит колонки 'всего' и 'просроченно' в файле СИ УАТ по заголовкам."""
+    total_col = None
+    overdue_col = None
+
+    # Ищем заголовки в первых 20 строках
+    for r in range(1, min(21, ws.max_row + 1)):
+        for c in range(1, ws.max_column + 1):
+            cell_val = ws.cell(row=r, column=c).value
+            if not cell_val:
+                continue
+            cell_str = str(cell_val).lower().strip()
+            # Убираем множественные пробелы
+            cell_str = ' '.join(cell_str.split())
+
+            # Колонка "всего" / "общая" / "total" / "общая дз"
+            if total_col is None:
+                if any(kw in cell_str for kw in ['всего', 'общая', 'total', 'общая дз', 'общая задолженность']):
+                    total_col = c
+                    print(f"  Найдена колонка 'всего': колонка {c} ('{cell_val}')")
+
+            # Колонка "просроченно" / "просрочка" / "overdue" / "ПДЗ"
+            if overdue_col is None:
+                if any(kw in cell_str for kw in ['просроченно', 'просрочка', 'overdue', 'пдз', 'просроченная дз', 'просроченная задолженность']):
+                    overdue_col = c
+                    print(f"  Найдена колонка 'просроченно': колонка {c} ('{cell_val}')")
+
+        if total_col and overdue_col:
+            break
+
+    # Fallback: используем стандартные колонки, если не нашли по заголовкам
+    if total_col is None:
+        total_col = COLUMNS['DEBT_AMOUNT']
+        print(f"  Fallback: колонка 'всего' = L ({total_col})")
+    if overdue_col is None:
+        overdue_col = COLUMNS['OVERDUE']
+        print(f"  Fallback: колонка 'просроченно' = O ({overdue_col})")
+
+    return total_col, overdue_col
+
+
+def extract_siuat_totals_by_max(ws):
+    """Извлекает totalDebt и totalOverdue из листа СИ УАТ по максимальным значениям в столбцах 12 и 15."""
+    total_col = 12  # L - общая задолженность
+    overdue_col = 15  # O - просроченная задолженность
+
+    max_debt = 0
+    max_overdue = 0
+
+    print(f"  Поиск максимальных значений (колонки: всего={total_col}, просроченно={overdue_col})...")
+
+    # Проходим по всем строкам и ищем максимальные значения
+    for r in range(1, ws.max_row + 1):
+        # Проверяем значение в колонке общей задолженности
+        v_total = get_cell_value(ws, r, total_col)
+        if isinstance(v_total, (int, float)) and v_total > max_debt:
+            max_debt = v_total
+
+        # Проверяем значение в колонке просрочки
+        v_overdue = get_cell_value(ws, r, overdue_col)
+        if isinstance(v_overdue, (int, float)) and v_overdue > max_overdue:
+            max_overdue = v_overdue
+
+    total_debt = round(max_debt, 2)
+    total_overdue = round(max_overdue, 2)
+
+    print(f"  СИ УАТ максимумы: общая ДЗ={total_debt} (col {total_col}), ПДЗ={total_overdue} (col {overdue_col})")
+
+    return total_debt, total_overdue
+
+
+def extract_siuat_totals(ws):
+    """Извлекает totalDebt и totalOverdue из листа СИ УАТ динамически."""
+    total_col, overdue_col = find_siuat_columns(ws)
+
+    total_debt = 0
+    total_overdue = 0
+
+    print(f"  Поиск строки 'ИТОГО' (колонки: всего={total_col}, просроченно={overdue_col})...")
+
+    # Ищем строку "Итого"/"ИТОГО" (гибкий поиск)
+    for r in range(1, ws.max_row + 1):
+        cell_val = get_cell_value(ws, r, 1)
+        if cell_val:
+            str_val = str(cell_val).strip().lower()
+            # Проверяем различные варианты написания
+            if 'итог' in str_val or 'total' in str_val or 'всего' in str_val:
+                v_total = get_cell_value(ws, r, total_col)
+                v_overdue = get_cell_value(ws, r, overdue_col)
+                total_debt = round(v_total, 2) if isinstance(v_total, (int, float)) else 0
+                total_overdue = round(v_overdue, 2) if isinstance(v_overdue, (int, float)) else 0
+                print(f"  СИ УАТ из строки '{cell_val}' (row {r}): общая ДЗ={total_debt} (col {total_col}), ПДЗ={total_overdue} (col {overdue_col})")
+                break
+
+    # Fallback: если не нашли "Итого", ищем последнюю строку с числовыми данными
+    if total_debt == 0:
+        print(f"  Строка 'ИТОГО' не найдена, используем fallback...")
+        for r in range(ws.max_row, 0, -1):
+            val = get_cell_value(ws, r, total_col)
+            if isinstance(val, (int, float)) and val > 0:
+                total_debt = round(val, 2)
+                v_overdue = get_cell_value(ws, r, overdue_col)
+                total_overdue = round(v_overdue, 2) if isinstance(v_overdue, (int, float)) else 0
+                print(f"  СИ УАТ fallback строка {r}: общая ДЗ={total_debt}, ПДЗ={total_overdue}")
+                break
+
+    return total_debt, total_overdue
 
 
 def extract_total_row_debt(ws, total_row):
