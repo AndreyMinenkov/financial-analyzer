@@ -788,15 +788,18 @@ class App {
 
             if (result.success) {
                 fileInfoEl.innerHTML =
-                    `<i class="fas fa-check-circle" style="color: var(--success);"></i> ${file.name}`;
+                    `<i class="fas fa-check-circle" style="color: var(--success);"></i> ${file.name} (${result.count} ДТ, ${this.formatCurrency(result.total)})`;
                 this.showNotification(result.message, 'success');
             } else {
                 fileInfoEl.innerHTML =
                     `<i class="fas fa-exclamation-circle" style="color: var(--danger);"></i> ${result.message}`;
                 this.showNotification(result.message, 'error');
             }
+
+            return result;
         } catch (error) {
             this.showNotification('Ошибка загрузки файла: ' + error.message, 'error');
+            return { success: false, message: error.message };
         } finally {
             this.hideLoading();
         }
