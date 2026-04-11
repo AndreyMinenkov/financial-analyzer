@@ -410,6 +410,11 @@ class App {
             this.saveSummarySettings();
         });
 
+        // Кнопка сохранения данных текущего дня
+        document.getElementById('saveCurrentDayBtn').addEventListener('click', () => {
+            this.saveCurrentDayData();
+        });
+
         // Кнопка очистки данных предыдущего дня
         document.getElementById('clearPreviousDayDataBtn').addEventListener('click', () => {
             this.clearPreviousDayData();
@@ -642,6 +647,7 @@ class App {
                 this.showReconciliationStats(this.debtManager.getStats());
                 this.showReconciliationLog(this.debtManager.getProcessedLog());
                 document.getElementById('exportReconciledBtn').disabled = false;
+                document.getElementById('saveCurrentDayBtn').disabled = false;
                 // Обновляем индикатор данных предыдущего дня
                 this.updatePreviousDayIndicator();
                 this.showNotification(result.message, 'success');
@@ -894,6 +900,7 @@ class App {
             // Сбрасываем информацию о файле
             document.getElementById('previousDayFileInfo').innerHTML = '<i class="fas fa-info-circle"></i> Файл не загружен';
             document.getElementById('previousDayFileInput').value = '';
+            document.getElementById('previousDayDateInput').value = '';
 
             this.renderPreviousDayDataTable();
             this.updatePreviousDayIndicator();
@@ -902,6 +909,13 @@ class App {
         } else {
             this.showNotification(result.message, 'error');
         }
+    }
+
+    // Сохранение данных текущего дня в localStorage для сравнения завтра
+    saveCurrentDayData() {
+        this.debtManager.saveCurrentDayData();
+        this.updatePreviousDayIndicator();
+        this.showNotification('Данные текущего дня сохранены для сравнения завтра', 'success');
     }
 
     // Сохранение настроек сводных
