@@ -899,6 +899,11 @@ def find_siuat_columns(ws):
     total_col = None
     overdue_col = None
 
+    # Собираем ВСЕ кандидатов с приоритетами, затем выбираем лучших
+    # Приоритет 0 = самый высокий (точное/лучшее совпадение)
+    total_candidates = []
+    overdue_candidates = []
+
     # Ищем заголовки в первых 20 строках
     for r in range(1, min(21, ws.max_row + 1)):
         for c in range(1, ws.max_column + 1):
@@ -906,51 +911,105 @@ def find_siuat_columns(ws):
             if not cell_val:
                 continue
             cell_str = str(cell_val).lower().strip()
-            # Убираем множественные пробелы
             cell_str = ' '.join(cell_str.split())
 
-            # Колонка "всего" / "общая" / "total" / "общая дз"
-            if total_col is None:
-                if any(kw in cell_str for kw in ['всего', 'общая', 'total', 'общая дз', 'общая задолженность']):
-                    total_col = c
-                    print(f"  Найдена колонка 'всего': колонка {c} ('{cell_val}')")
+            # --- Колонка "всего" ---
+            # Приоритет: "всего" (0) > "общая дз" (1) > "общая задолженность" (2) > "общая" (3)
+            if 'всего' in cell_str:
+                total_candidates.append((c, 0, cell_str))
+            elif 'общая дз' in cell_str:
+                total_candidates.append((c, 1, cell_str))
+            elif 'общая задолженность' in cell_str:
+                total_candidates.append((c, 2, cell_str))
+            elif 'общая' in cell_str or 'total' in cell_str:
+                total_candidates.append((c, 3, cell_str))
 
-            # Колонка "просроченно" / "просрочка" / "overdue" / "ПДЗ"
-            if overdue_col is None:
-                if any(kw in cell_str for kw in ['просроченно', 'просрочка', 'overdue', 'пдз', 'просроченная дз', 'просроченная задолженность']):
-                    overdue_col = c
-                    print(f"  Найдена колонка 'просроченно': колонка {c} ('{cell_val}')")
+            # --- Колонка "просроченно" ---
+            # Приоритет: "просроченно" (0) > "просрочка" (1) > "пдз" (2) > "просроченная дз" (3)
+            if 'просроченно' in cell_str:
+                overdue_candidates.append((c, 0, cell_str))
+            elif 'просрочка' in cell_str:
+                overdue_candidates.append((c, 1, cell_str))
+            elif 'пдз' in cell_str:
+                overdue_candidates.append((c, 2, cell_str))
+            elif 'просроченная дз' in cell_str or 'просроченная задолженность' in cell_str:
+                overdue_candidates.append((c, 3, cell_str))
+            elif 'overdue' in cell_str:
+                overdue_candidates.append((c, 3, cell_str))
 
-        if total_col and overdue_col:
-            break
+    # Выбираем лучшего кандидата (наименьший приоритет, наименьший номер колонки)
+    if total_candidates:
+        total_candidates.sort(key=lambda x: (x[1], x[0]))
+        best = total_candidates[0]
+        total_col = best[0]
+        print(f"  Найдена колонка 'всего': колонка {total_col} (приоритет {best[1]}, '{best[2]}')")
+        # Отладка: показать всех кандидатов
+        for c, p, s in total_candidates:
+            print(f"    кандидат: колонка {c}, приоритет {p}, '{s}'")
 
-    # Fallback: используем стандартные колонки, если не нашли по заголовкам
+    if overdue_candidates:
+        overdue_candidates.sort(key=lambda x: (x[1], x[0]))
+        best = overdue_candidates[0]
+        overdue_col = best[0]
+        print(f"  Найдена колонка 'просроченно': колонка {overdue_col} (приоритет {best[1]}, '{best[2]}')")
+        for c, p, s in overdue_candidates:
+            print(f"    кандидат: колонка {c}, приоритет {p}, '{s}'")
+
+    # Fallback: используем стандартные колонки 12 и 15
     if total_col is None:
-        total_col = COLUMNS['DEBT_AMOUNT']
-        print(f"  Fallback: колонка 'всего' = L ({total_col})")
+        total_col = 12
+        print(f"  Fallback: колонка 'всего' = {total_col}")
     if overdue_col is None:
-        overdue_col = COLUMNS['OVERDUE']
-        print(f"  Fallback: колонка 'просроченно' = O ({overdue_col})")
+        overdue_col = 15
+        print(f"  Fallback: колонка 'просроченно' = {overdue_col}")
 
     return total_col, overdue_col
 
 
+def _parse_cell_number(value):
+    """Безопасно преобразует значение ячейки в число."""
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        # Удаляем пробелы, заменяем запятую на точку
+        cleaned = value.replace(' ', '').replace(',', '.')
+        try:
+            return float(cleaned)
+        except ValueError:
+            return 0
+    return 0
+
+
 def extract_siuat_totals_by_max(ws):
     """Извлекает totalDebt и totalOverdue из листа СИ УАТ.
-    
+
     Стратегия:
-    1. Сначала ищем колонки по заголовкам (гибкий поиск)
-    2. Если не нашли - используем столбцы 12 и 15
-    3. Ищем строку "ИТОГО" и берём данные из неё
-    4. Если не нашли "ИТОГО" - берём максимальные значения по всем строкам
+    1. Ищем колонки по заголовкам с приоритетами
+    2. Ищем строку заголовков (где есть "Всего" и "Просрочено") — это граница основной таблицы
+    3. Ищем "ИТОГО" ПОСЛЕ строки заголовков (в основной таблице, не в сводной сверху)
+    4. Если не нашли — берём максимальные значения по строкам основной таблицы
     """
-    # Попытка 1: Найти колонки по заголовкам
     total_col, overdue_col = find_siuat_columns(ws)
     print(f"  Используем колонки: всего={total_col}, просроченно={overdue_col}")
 
-    # Попытка 2: Найти строку "ИТОГО"
+    # Находим строку заголовков основной таблицы (где есть "Контрагент" или "Договор" в столбце 1)
+    # Это граница между верхней сводной таблицей и основной таблицей
+    header_row = None
+    for r in range(1, min(30, ws.max_row + 1)):
+        cell_val = ws.cell(row=r, column=1).value
+        if cell_val:
+            str_val = str(cell_val).strip().lower()
+            if 'контрагент' in str_val or 'договор' in str_val or 'филиал' in str_val:
+                header_row = r
+                print(f"  Найдена строка заголовков основной таблицы: строка {r} ('{cell_val}')")
+                break
+
+    # Ищем "ИТОГО" только ПОСЛЕ строки заголовков
     itogo_row = None
-    for r in range(1, ws.max_row + 1):
+    start_search = header_row if header_row else 1
+    for r in range(start_search, ws.max_row + 1):
         cell_val = get_cell_value(ws, r, 1)
         if cell_val:
             str_val = str(cell_val).strip().lower()
@@ -959,29 +1018,29 @@ def extract_siuat_totals_by_max(ws):
                 print(f"  Найдена строка 'ИТОГО' на строке {r}")
                 break
 
-    # Если нашли "ИТОГО" - берём данные из неё
+    # Если нашли "ИТОГО" — берём данные из неё
     if itogo_row:
-        v_total = get_cell_value(ws, itogo_row, total_col)
-        v_overdue = get_cell_value(ws, itogo_row, overdue_col)
-        total_debt = round(v_total, 2) if isinstance(v_total, (int, float)) else 0
-        total_overdue = round(v_overdue, 2) if isinstance(v_overdue, (int, float)) else 0
+        v_total = _parse_cell_number(get_cell_value(ws, itogo_row, total_col))
+        v_overdue = _parse_cell_number(get_cell_value(ws, itogo_row, overdue_col))
+        total_debt = round(v_total, 2)
+        total_overdue = round(v_overdue, 2)
         print(f"  Данные из строки 'ИТОГО': общая ДЗ={total_debt}, ПДЗ={total_overdue}")
 
         if total_debt > 0 and total_overdue > 0:
             return total_debt, total_overdue
 
-    # Попытка 3: Если не нашли "ИТОГО" или данные = 0, ищем максимальные значения
-    print(f"  Ищем максимальные значения по всем строкам...")
+    # Если не нашли "ИТОГО" или данные = 0, ищем максимальные значения по строкам основной таблицы
+    print(f"  Ищем максимальные значения по строкам основной таблицы (начиная со строки {start_search})...")
     max_debt = 0
     max_overdue = 0
 
-    for r in range(1, ws.max_row + 1):
-        v_total = get_cell_value(ws, r, total_col)
-        if isinstance(v_total, (int, float)) and v_total > max_debt:
+    for r in range(start_search, ws.max_row + 1):
+        v_total = _parse_cell_number(get_cell_value(ws, r, total_col))
+        if v_total > max_debt:
             max_debt = v_total
 
-        v_overdue = get_cell_value(ws, r, overdue_col)
-        if isinstance(v_overdue, (int, float)) and v_overdue > max_overdue:
+        v_overdue = _parse_cell_number(get_cell_value(ws, r, overdue_col))
+        if v_overdue > max_overdue:
             max_overdue = v_overdue
 
     total_debt = round(max_debt, 2)
