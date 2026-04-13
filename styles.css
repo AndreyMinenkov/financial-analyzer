@@ -1241,7 +1241,6 @@ body {
     align-items: center;
     gap: 10px;
     background: var(--bg-tertiary);
-    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 
 /* ── Формы ───────────────────────────────────────────────── */
