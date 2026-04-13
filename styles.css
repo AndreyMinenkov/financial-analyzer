@@ -1243,6 +1243,12 @@ body {
     background: var(--bg-tertiary);
 }
 
+/* Модальные окна с широким футером (настройки) */
+.modal-footer--settings {
+    gap: 16px;
+    padding: 12px 48px;
+}
+
 /* ── Формы ───────────────────────────────────────────────── */
 .form-group { margin-bottom: 16px; }
 .form-group:last-child { margin-bottom: 0; }
