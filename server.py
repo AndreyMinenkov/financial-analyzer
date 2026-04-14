@@ -727,6 +727,7 @@ def save_excel():
         align_numeric_cells(ws)
 
         # ===== ИЗВЛЕКАЕМ ДАННЫЕ ИЗ ГЛАВНОГО ЛИСТА (до переименования) =====
+        # ВАЖНО: извлекаем ПОСЛЕ recalc_totals, чтобы данные филиалов были актуальными
         current_day_data_from_file = extract_filial_overdue(ws)
         data['currentDayData'] = current_day_data_from_file
         total_debt_data = extract_total_row_debt(ws, total_row)
@@ -954,11 +955,20 @@ def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_de
 
 
 def extract_filial_overdue(ws):
-    """Извлекает суммы просрочки из строк филиалов (колонка O)."""
+    """Извлекает суммы просрочки из строк филиалов (колонка O).
+    
+    Берёт только строки с indent=0 (корневые филиалы), чтобы данные
+    совпадали с тем, что пересчитывает recalc_totals.
+    """
     data = {}
     for r in range(14, ws.max_row + 1):
         v = get_cell_value(ws, r, 1)
         if v and str(v).strip().startswith('ДТ '):
+            # Проверяем indent — берём только корневые филиалы (indent=0)
+            cell = ws.cell(row=r, column=1)
+            indent = int(cell.alignment.indent) if cell.alignment and cell.alignment.indent is not None else 0
+            if indent != 0:
+                continue  # пропускаем дочерние строки с ДТ
             ov = get_cell_value(ws, r, COLUMNS['OVERDUE'])
             data[str(v).strip()] = ov if isinstance(ov, (int, float)) else 0
     for k in data: data[k] = round(data[k], 2)
