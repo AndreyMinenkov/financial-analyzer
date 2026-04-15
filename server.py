@@ -6,6 +6,7 @@ from openpyxl.styles import numbers, Alignment, Font, PatternFill, Border, Side
 from openpyxl.worksheet.views import Pane
 from copy import copy
 import io
+import base64
 from datetime import datetime
 import json
 import traceback
@@ -836,12 +837,24 @@ def save_excel():
 
         print("\n=== ФАЙЛ УСПЕШНО ОБРАБОТАН, ОТПРАВЛЯЕМ ===\n")
 
-        return send_file(
+        # === Возвращаем данные филиалов в кастомном заголовке ===
+        # Клиент использует эти данные для сохранения в localStorage
+        # вместо собственных расчётов, которые могут отличаться от серверных
+        filial_data_json = json.dumps(current_day_data_from_file, ensure_ascii=False)
+        print(f"Данные филиалов для клиента: {filial_data_json}")
+
+        response = send_file(
             output,
             as_attachment=True,
             download_name=f'ДЗ_обновленный_{datetime.now().strftime("%Y-%m-%d")}.xlsx',
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
+        # Добавляем данные филиалов в заголовок ответа
+        # Кодируем в base64 чтобы избежать проблем с кодировкой заголовков
+        filial_data_b64 = base64.b64encode(filial_data_json.encode('utf-8')).decode('ascii')
+        response.headers['X-Filial-Data'] = filial_data_b64
+
+        return response
 
     except Exception as e:
         print("\n!!! ОШИБКА !!!")

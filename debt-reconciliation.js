@@ -149,7 +149,14 @@ class DebtReconciliationManager {
     }
 
     // Собрать данные по филиалам из debtData (только из колонки OVERDUE)
-    collectSubdivisionData() {
+    // Работает в двух режимах:
+    // 1. Суммирование документов по филиалам (по умолчанию) — перебирает все документы
+    //    и суммирует их OVERDUE к текущему филиалу.
+    // 2. Извлечение из строк филиалов (если fromFilialRows = true) — берёт OVERDUE
+    //    напрямую из строк филиалов (аналог server.py extract_filial_overdue).
+    //    Используется когда debtData прошёл через reconcile() и строки филиалов
+    //    содержат актуальные пересчитанные значения.
+    collectSubdivisionData(fromFilialRows = false) {
         const subdivisionData = {};
         let currentFilial = null;
         let filialCount = 0;
@@ -159,6 +166,7 @@ class DebtReconciliationManager {
         console.log('=== collectSubdivisionData START ===');
         console.log('debtData строк:', this.debtData.length);
         console.log('processedDocuments (обновлённые через reconcile):', this.processedDocuments.length);
+        console.log('Режим:', fromFilialRows ? 'из строк филиалов' : 'суммирование документов');
 
         // Создаём Set обработанных документов для отладки
         const processedRowSet = new Set(this.processedDocuments.map(d => d.rowIndex));
@@ -182,11 +190,20 @@ class DebtReconciliationManager {
                     subdivisionData[currentFilial] = 0;
                     filialCount++;
                 }
+
+                // РЕЖИМ: из строк филиалов — берём OVERDUE напрямую из строки филиала
+                if (fromFilialRows) {
+                    const rawValue = row[this.COLUMNS.OVERDUE];
+                    const overdue = this.parseExcelNumber(rawValue || 0);
+                    subdivisionData[currentFilial] = overdue;
+                    totalOverdue += overdue;
+                    console.log(`  Филиал "${strVal}": OVERDUE=${overdue}`);
+                }
+                continue;
             }
 
-            // Документ — добавляем просрочку к текущему филиалу
-            // isDocumentRow уже содержит полную проверку на ключевые слова документов
-            if (this.isDocumentRow(row) && currentFilial && !processedRows.has(i)) {
+            // РЕЖИМ: суммирование документов — добавляем просрочку к текущему филиалу
+            if (!fromFilialRows && this.isDocumentRow(row) && currentFilial && !processedRows.has(i)) {
                 // ВАЖНО: берем значение из колонки OVERDUE (просрочено)
                 const rawValue = row[this.COLUMNS.OVERDUE];
                 const overdue = this.parseExcelNumber(rawValue || 0);
@@ -992,6 +1009,34 @@ class DebtReconciliationManager {
             const blob = await serverResponse.blob();
             console.log('Получен ответ, размер:', blob.size, 'байт');
 
+            // === ЧИТАЕМ ДАННЫЕ ФИЛИАЛОВ ИЗ ЗАГОЛОВКА ОТВЕТА СЕРВЕРА ===
+            // Сервер возвращает точные данные после recalc_totals() в заголовке X-Filial-Data
+            const filialDataHeader = serverResponse.headers.get('X-Filial-Data');
+            let serverFilialData = null;
+
+            if (filialDataHeader) {
+                try {
+                    // Декодируем base64
+                    const jsonStr = atob(filialDataHeader);
+                    serverFilialData = JSON.parse(jsonStr);
+                    console.log('=== ДАННЫЕ ФИЛИАЛОВ С СЕРВЕРА (из заголовка X-Filial-Data) ===');
+                    console.log('serverFilialData:', JSON.stringify(serverFilialData));
+                } catch (e) {
+                    console.warn('Не удалось распарсить заголовок X-Filial-Data:', e);
+                }
+            } else {
+                console.warn('Заголовок X-Filial-Data не найден в ответе сервера');
+            }
+
+            // Используем данные с сервера если они доступны, иначе fallback на клиентские
+            const dataToSave = serverFilialData || this.currentSubdivisionData;
+
+            if (serverFilialData) {
+                console.log('Используются данные филиалов СЕРВЕРА (после recalc_totals)');
+            } else {
+                console.log(' FALLBACK: Используются клиентские данные (суммирование документов)');
+            }
+
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -1002,15 +1047,27 @@ class DebtReconciliationManager {
             window.URL.revokeObjectURL(url);
 
             console.log('Файл успешно сохранен');
+
+            // === АВТОМАТИЧЕСКОЕ СОХРАНЕНИЕ ДАННЫХ В LOCALSTORAGE ===
+            // После успешной сверки перезаписываем данные предыдущего дня текущими данными.
+            // Цикл:
+            // 1. При формировании сводной таблицы динамики берутся данные из localStorage (предыдущий день)
+            // 2. После сохранения файла текущие данные записываются в localStorage для использования завтра
+            console.log('=== АВТОСОХРАНЕНИЕ ДАННЫХ В LOCALSTORAGE ===');
+
+            // Сохраняем точные данные с сервера (или клиентские если заголовок недоступен)
+            this.currentSubdivisionData = dataToSave;
+            console.log('currentSubdivisionData для сохранения:', JSON.stringify(this.currentSubdivisionData));
+
+            this.saveCurrentDayData();
+            console.log('Данные текущего дня сохранены в localStorage для использования завтра');
             console.log('=== ИТОГОВЫЕ ДАННЫЕ ДЛЯ ТАБЛИЦЫ ДИНАМИКИ ===');
-            console.log('СТОЛБЕЦ 2 (текущий день, из debtData):', JSON.stringify(this.currentSubdivisionData));
-            console.log('СТОЛБЕЦ 3 (предыдущий день, из localStorage):', JSON.stringify(this.getPreviousDayData()));
-            console.log('Данные НЕ сохранены в localStorage автоматически.');
-            console.log('Для сохранения текущих данных в localStorage используйте "Настройки сводных" → "Сохранить".');
+            console.log('Текущий день (теперь будет в столбце 2 при следующей сверке):', JSON.stringify(this.currentSubdivisionData));
+            console.log('Предыдущий день (будет в столбце 3 при следующей сверке):', JSON.stringify(this.getPreviousDayData()));
 
             return {
                 success: true,
-                message: 'Файл сохранен с полным форматированием'
+                message: 'Файл сохранен с полным форматированием. Данные сохранены автоматически.'
             };
 
         } catch (error) {
