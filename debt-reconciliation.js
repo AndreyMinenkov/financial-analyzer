@@ -780,7 +780,7 @@ class DebtReconciliationManager {
                         this.stats.updatedDocuments++;
                         this.processedDocuments.push({
                             documentName: docName,
-                            action: 'updated',
+                            action: 'Выполнено',
                             date: expectedDate ? this.formatDate(expectedDate) : null,
                             amount: debtAmount,
                             rowIndex: i,
