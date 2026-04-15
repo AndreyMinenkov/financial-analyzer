@@ -1010,9 +1010,14 @@ class DebtReconciliationManager {
             console.log('Получен ответ, размер:', blob.size, 'байт');
 
             // === ЧИТАЕМ ДАННЫЕ ФИЛИАЛОВ ИЗ ЗАГОЛОВКА ОТВЕТА СЕРВЕРА ===
-            // Сервер возвращает точные данные после recalc_totals() в заголовке X-Filial-Data
+            // Сервер возвращает точные данные после recalc_totals() в заголовке X-Filial-Data.
+            // Клиент НЕ должен использовать собственные расчёты, потому что:
+            // - Клиент суммирует ВСЕ документы (включая промежуточные строки: контрагенты, договоры)
+            // - Сервер суммирует ТОЛЬКО листья дерева (через recalc_totals)
+            // - Это даёт разницу в суммах, особенно для филиалов с вложенной структурой
             const filialDataHeader = serverResponse.headers.get('X-Filial-Data');
             let serverFilialData = null;
+            let serverDataAvailable = false;
 
             if (filialDataHeader) {
                 try {
@@ -1021,21 +1026,31 @@ class DebtReconciliationManager {
                     serverFilialData = JSON.parse(jsonStr);
                     console.log('=== ДАННЫЕ ФИЛИАЛОВ С СЕРВЕРА (из заголовка X-Filial-Data) ===');
                     console.log('serverFilialData:', JSON.stringify(serverFilialData));
+
+                    if (serverFilialData && Object.keys(serverFilialData).length > 0) {
+                        serverDataAvailable = true;
+                        console.log('✅ Серверные данные получены успешно, филиалов:', Object.keys(serverFilialData).length);
+                    } else {
+                        console.warn('⚠️ Серверные данные пусты');
+                    }
                 } catch (e) {
-                    console.warn('Не удалось распарсить заголовок X-Filial-Data:', e);
+                    console.warn('⚠️ Не удалось распарсить заголовок X-Filial-Data:', e);
                 }
             } else {
-                console.warn('Заголовок X-Filial-Data не найден в ответе сервера');
+                console.warn('⚠️ Заголовок X-Filial-Data не найден в ответе сервера');
+                console.warn('   Возможная причина: CORS не настроен на expose_headers для X-Filial-Data');
             }
 
-            // Используем данные с сервера если они доступны, иначе fallback на клиентские
-            const dataToSave = serverFilialData || this.currentSubdivisionData;
-
-            if (serverFilialData) {
-                console.log('Используются данные филиалов СЕРВЕРА (после recalc_totals)');
-            } else {
-                console.log(' FALLBACK: Используются клиентские данные (суммирование документов)');
+            // ВАЖНО: используем ТОЛЬКО серверные данные для сохранения в localStorage
+            // Клиентские расчёты (collectSubdivisionData) дают неточные результаты из-за
+            // двойного учёта промежуточных строк (контрагенты + документы под ними)
+            if (!serverDataAvailable) {
+                console.error('❌ ОШИБКА: серверные данные недоступны. Данные НЕ будут сохранены в localStorage.');
+                console.error('   Проверьте что CORS настроен на expose_headers=["X-Filial-Data"]');
+                console.error('   И что сервер запущен с обновлённым кодом.');
             }
+
+            const dataToSave = serverDataAvailable ? serverFilialData : null;
 
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -1049,26 +1064,33 @@ class DebtReconciliationManager {
             console.log('Файл успешно сохранен');
 
             // === АВТОМАТИЧЕСКОЕ СОХРАНЕНИЕ ДАННЫХ В LOCALSTORAGE ===
-            // После успешной сверки перезаписываем данные предыдущего дня текущими данными.
-            // Цикл:
-            // 1. При формировании сводной таблицы динамики берутся данные из localStorage (предыдущий день)
-            // 2. После сохранения файла текущие данные записываются в localStorage для использования завтра
             console.log('=== АВТОСОХРАНЕНИЕ ДАННЫХ В LOCALSTORAGE ===');
 
-            // Сохраняем точные данные с сервера (или клиентские если заголовок недоступен)
-            this.currentSubdivisionData = dataToSave;
-            console.log('currentSubdivisionData для сохранения:', JSON.stringify(this.currentSubdivisionData));
+            if (dataToSave) {
+                // Сохраняем ТОЛЬКО серверные данные
+                this.currentSubdivisionData = dataToSave;
+                console.log('currentSubdivisionData для сохранения (серверные):', JSON.stringify(this.currentSubdivisionData));
 
-            this.saveCurrentDayData();
-            console.log('Данные текущего дня сохранены в localStorage для использования завтра');
-            console.log('=== ИТОГОВЫЕ ДАННЫЕ ДЛЯ ТАБЛИЦЫ ДИНАМИКИ ===');
-            console.log('Текущий день (теперь будет в столбце 2 при следующей сверке):', JSON.stringify(this.currentSubdivisionData));
-            console.log('Предыдущий день (будет в столбце 3 при следующей сверке):', JSON.stringify(this.getPreviousDayData()));
+                this.saveCurrentDayData();
+                console.log('✅ Данные текущего дня сохранены в localStorage для использования завтра');
+                console.log('=== ИТОГОВЫЕ ДАННЫЕ ДЛЯ ТАБЛИЦЫ ДИНАМИКИ ===');
+                console.log('Текущий день (теперь будет в столбце 2 при следующей сверке):', JSON.stringify(this.currentSubdivisionData));
+                console.log('Предыдущий день (будет в столбце 3 при следующей сверке):', JSON.stringify(this.getPreviousDayData()));
 
-            return {
-                success: true,
-                message: 'Файл сохранен с полным форматированием. Данные сохранены автоматически.'
-            };
+                return {
+                    success: true,
+                    message: 'Файл сохранен. Данные сохранены автоматически.'
+                };
+            } else {
+                // Серверные данные недоступны — не сохраняем ничего
+                console.warn('⚠️ Данные НЕ сохранены в localStorage (серверные данные недоступны)');
+                console.warn('   Для сохранения используйте "Настройки сводных" → "Сохранить" после загрузки файла с данными');
+
+                return {
+                    success: true,
+                    message: 'Файл сохранен. ВНИМАНИЕ: данные для сводной таблицы НЕ сохранены автоматически. Проверьте настройки CORS.'
+                };
+            }
 
         } catch (error) {
             console.error('Ошибка при отправке на сервер:', error);

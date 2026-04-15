@@ -13,7 +13,8 @@ import traceback
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB max file size
-CORS(app)
+# Разрешаем кастомный заголовок X-Filial-Data чтобы клиент мог читать данные филиалов
+CORS(app, expose_headers=['X-Filial-Data'])
 
 # Список целевых контрагентов (используется только для фильтрации документов)
 TARGET_CONTRAGENTS = ['ВАНКОРНЕФТЬ АО', 'РН-Ванкор ООО']
