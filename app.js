@@ -8,6 +8,7 @@ class App {
         this.debtManager = new DebtReconciliationManager(this.storage);
         this.contractorsLibrary = new ContractorsLibrary();
         this.supplierPayments = new SupplierPaymentsManager(this.contractorsLibrary);
+        this.reportsManager = new ReportsManager();
         this.originalWorkbook = null; // Для хранения оригинального файла поставщиков
         this.init();
     }
@@ -18,6 +19,7 @@ class App {
         this.setupSidebarToggle();
         this.setupEventListeners();
         this.setupContractorsManager();
+        this.reportsManager.init();
         this.loadCurrentPage();
         this.updateStats();
         this.setHeaderDate();
@@ -118,7 +120,8 @@ class App {
             balances: 'Остатки',
             debt: 'Дебиторка',
             suppliers: 'Оплаты поставщикам',
-            library: 'Библиотека'
+            library: 'Библиотека',
+            reports: 'Отчёты'
         };
         el.textContent = names[pageName] || pageName;
     }

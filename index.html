@@ -50,6 +50,10 @@
                     <i class="fas fa-address-book"></i>
                     <span class="sidebar-nav-text">Библиотека</span>
                 </button>
+                <button class="sidebar-nav-btn" data-page="reports">
+                    <i class="fas fa-chart-bar"></i>
+                    <span class="sidebar-nav-text">Отчёты</span>
+                </button>
             </nav>
 
             <div class="sidebar-footer">
@@ -884,6 +888,150 @@
         </div>
     </div>
 
+    <!-- Страница отчётов (Dashboard) -->
+    <div id="reports-page" class="page">
+        <div class="page-header">
+            <div>
+                <h1><i class="fas fa-chart-bar"></i> Отчёты и дашборды</h1>
+                <p class="page-description">Анализ динамики дебиторской задолженности по филиалам и контрагентам</p>
+            </div>
+        </div>
+
+        <!-- Блок выбора раздела -->
+        <div class="report-sections">
+            <div class="report-card report-card-debt" id="reportCardDebt">
+                <div class="report-card-icon">
+                    <i class="fas fa-file-invoice-dollar"></i>
+                </div>
+                <div class="report-card-info">
+                    <h3>Дебиторка</h3>
+                    <p>Динамика просроченной задолженности по филиалам и контрагентам</p>
+                </div>
+                <div class="report-card-arrow">
+                    <i class="fas fa-arrow-right"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Панель дашборда (скрыта по умолчанию) -->
+        <div id="dashboardPanel" style="display: none;">
+            <!-- Шапка дашборда -->
+            <div class="dashboard-header">
+                <button class="btn btn-secondary" id="backToReportsBtn">
+                    <i class="fas fa-arrow-left"></i> Назад к отчётам
+                </button>
+                <h2 id="dashboardTitle">Дебиторка — Динамика ПДЗ</h2>
+                <button class="btn btn-primary" id="buildDashboardBtn">
+                    <i class="fas fa-sync-alt"></i> Сформировать
+                </button>
+            </div>
+
+            <!-- Фильтры -->
+            <div class="dashboard-filters">
+                <div class="filter-group">
+                    <label>Период с:</label>
+                    <input type="date" id="dashFromDate">
+                </div>
+                <div class="filter-group">
+                    <label>по:</label>
+                    <input type="date" id="dashToDate">
+                </div>
+                <div class="filter-group">
+                    <label>Филиал (ДТ):</label>
+                    <select id="dashFilialSelect">
+                        <option value="">— Все филиалы —</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Контрагент:</label>
+                    <select id="dashCounterpartySelect">
+                        <option value="">— Все контрагенты —</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Карточки сводки -->
+            <div class="summary-cards" id="dashboardSummaryCards">
+                <div class="summary-card">
+                    <div class="summary-icon summary-icon-blue">
+                        <i class="fas fa-calendar-check"></i>
+                    </div>
+                    <div class="summary-info">
+                        <div class="summary-label">Сверок за период</div>
+                        <div class="summary-value" id="dashSwipeCount">0</div>
+                    </div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-icon summary-icon-green">
+                        <i class="fas fa-arrow-down"></i>
+                    </div>
+                    <div class="summary-info">
+                        <div class="summary-label">Мин. ПДЗ</div>
+                        <div class="summary-value" id="dashMinOverdue">0 ₽</div>
+                    </div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-icon summary-icon-orange">
+                        <i class="fas fa-arrow-up"></i>
+                    </div>
+                    <div class="summary-info">
+                        <div class="summary-label">Макс. ПДЗ</div>
+                        <div class="summary-value" id="dashMaxOverdue">0 ₽</div>
+                    </div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-icon summary-icon-purple">
+                        <i class="fas fa-chart-line"></i>
+                    </div>
+                    <div class="summary-info">
+                        <div class="summary-label">Средняя ПДЗ</div>
+                        <div class="summary-value" id="dashAvgOverdue">0 ₽</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- График динамики -->
+            <div class="chart-container">
+                <h3>Динамика общей ПДЗ</h3>
+                <canvas id="overdueTrendChart"></canvas>
+            </div>
+
+            <!-- График по филиалам -->
+            <div class="chart-container">
+                <h3>Сравнение филиалов</h3>
+                <canvas id="filialComparisonChart"></canvas>
+            </div>
+
+            <!-- График по контрагентам -->
+            <div class="chart-container">
+                <h3>Динамика по контрагентам</h3>
+                <canvas id="counterpartyTrendChart"></canvas>
+            </div>
+
+            <!-- Таблица истории -->
+            <div class="table-container" style="margin-top: 24px;">
+                <h3 style="padding: 16px 16px 8px; margin: 0; font-size: 15px; font-weight: 600;">История сверок</h3>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Дата</th>
+                            <th>Общая ПДЗ</th>
+                            <th>Общая ДЗ</th>
+                            <th>Филиалов</th>
+                            <th>Контрагентов</th>
+                        </tr>
+                    </thead>
+                    <tbody id="swipeHistoryBody">
+                        <tr class="empty-row">
+                            <td colspan="5">Нажмите «Сформировать» для загрузки данных</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="lib/chart.min.js"></script>
     <script src="storage.js"></script>
     <script src="parser.js"></script>
     <script src="receipts-manager.js"></script>
@@ -891,6 +1039,7 @@
     <script src="debt-reconciliation.js"></script>
     <script src="contractors-library.js"></script>
     <script src="supplier-payments.js"></script>
+    <script src="reports-manager.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

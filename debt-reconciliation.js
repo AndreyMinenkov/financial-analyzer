@@ -385,6 +385,97 @@ class DebtReconciliationManager {
         return false;
     }
 
+    // Сохранение данных сверки в PostgreSQL для дашборда
+    async saveToDashboardDB(filialData) {
+        try {
+            const swipeDate = this.formatDate(this.currentDate);
+
+            // Собираем данные по контрагентам из processedDocuments
+            // (только для целевых контрагентов, которые были обработаны)
+            const counterpartyData = {};
+            this.processedDocuments.forEach(doc => {
+                const kontragent = this.findKontragentForRow(doc.rowIndex);
+                if (kontragent) {
+                    const key = [doc.rowIndex];
+                    // Находим филиал для этого документа
+                    let filialForDoc = null;
+                    for (let i = doc.rowIndex; i >= 0; i--) {
+                        const row = this.debtData[i];
+                        if (!row) continue;
+                        const val = String(row[0] || '').trim();
+                        if (val.startsWith('ДТ ')) {
+                            filialForDoc = val;
+                            break;
+                        }
+                    }
+                    if (filialForDoc) {
+                        const cpKey = `${filialForDoc}||${kontragent}`;
+                        if (!counterpartyData[cpKey]) {
+                            counterpartyData[cpKey] = { filial: filialForDoc, counterparty: kontragent, debt: 0 };
+                        }
+                        counterpartyData[cpKey].debt += doc.amount;
+                    }
+                }
+            });
+
+            // Формируем данные для API
+            const cpFormatted = {};
+            for (const key in counterpartyData) {
+                const item = counterpartyData[key];
+                cpFormatted[key] = item.debt;
+            }
+
+            // Общая ДЗ и ПДЗ
+            let totalDebt = 0;
+            let totalOverdue = 0;
+            for (const filial in filialData) {
+                totalOverdue += filialData[filial];
+            }
+            // Суммируем общую ДЗ из debtData
+            for (let i = 0; i < this.debtData.length; i++) {
+                const row = this.debtData[i];
+                if (!row) continue;
+                if (this.isDocumentRow(row)) {
+                    totalDebt += this.parseExcelNumber(row[this.COLUMNS.DEBT_AMOUNT] || 0);
+                }
+            }
+            totalDebt = Math.round(totalDebt * 100) / 100;
+            totalOverdue = Math.round(totalOverdue * 100) / 100;
+
+            const payload = {
+                swipeDate: swipeDate,
+                filialData: filialData,
+                counterpartyData: cpFormatted,
+                totalDebt: totalDebt,
+                totalOverdue: totalOverdue
+            };
+
+            console.log('📊 Отправка данных в БД для дашборда...');
+            console.log('  Дата:', swipeDate);
+            console.log('  Филиалов:', Object.keys(filialData).length);
+            console.log('  Контрагентов:', Object.keys(cpFormatted).length);
+            console.log('  Общая ДЗ:', totalDebt);
+            console.log('  Общая ПДЗ:', totalOverdue);
+
+            const resp = await fetch('http://31.130.155.16:5000/api/save-swipe-data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const result = await resp.json();
+
+            if (result.success) {
+                console.log('✅ Данные сохранены в БД для дашборда (swipe_id:', result.swipe_id + ')');
+            } else {
+                console.warn('⚠️ Не удалось сохранить в БД:', result.error);
+            }
+        } catch (e) {
+            console.error('❌ Ошибка сохранения в БД дашборда:', e);
+            // Не блокируем основной процесс — ошибка только в логах
+        }
+    }
+
     formatDate(date) {
         if (!date) return '';
         const d = new Date(date);
@@ -1073,6 +1164,11 @@ class DebtReconciliationManager {
 
                 this.saveCurrentDayData();
                 console.log('✅ Данные текущего дня сохранены в localStorage для использования завтра');
+
+                // === СОХРАНЕНИЕ В PostgreSQL ДЛЯ ДАШБОРДА ===
+                // Сохраняем данные в БД для построения отчётов и дашбордов
+                this.saveToDashboardDB(dataToSave);
+
                 console.log('=== ИТОГОВЫЕ ДАННЫЕ ДЛЯ ТАБЛИЦЫ ДИНАМИКИ ===');
                 console.log('Текущий день (теперь будет в столбце 2 при следующей сверке):', JSON.stringify(this.currentSubdivisionData));
                 console.log('Предыдущий день (будет в столбце 3 при следующей сверке):', JSON.stringify(this.getPreviousDayData()));

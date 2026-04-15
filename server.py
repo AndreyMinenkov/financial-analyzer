@@ -1,4 +1,4 @@
-from flask import Flask, request, send_file
+from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 import openpyxl
 import openpyxl.utils
@@ -10,6 +10,7 @@ import base64
 from datetime import datetime
 import json
 import traceback
+import db  # Модуль работы с PostgreSQL для отчётов
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB max file size
@@ -1304,6 +1305,162 @@ def create_pivot_sheet_at_row(ws, headers, rows_data, title, start_row):
     ws.cell(row=row, column=len(headers) + 3).border = thin_border
 
     print(f"Сводная таблица '{title}' создана, строк: {row - start_row + 1}")
+
+
+# ============================================================
+# API для отчётов (Dashboard)
+# ============================================================
+
+@app.route('/api/save-swipe-data', methods=['POST'])
+def api_save_swipe_data():
+    """Сохраняет данные сверки в БД после успешной обработки"""
+    try:
+        data = request.get_json()
+        if not data:
+            return {'error': 'Нет данных'}, 400
+
+        swipe_date = data.get('swipeDate')
+        filial_data = data.get('filialData', {})
+        counterparty_data = data.get('counterpartyData', {})
+        total_debt = data.get('totalDebt', 0)
+        total_overdue = data.get('totalOverdue', 0)
+
+        if not swipe_date:
+            return {'error': 'Не указана дата сверки'}, 400
+
+        print(f"\n=== СОХРАНЕНИЕ ДАННЫХ СВЕРКИ В БД ===")
+        print(f"Дата: {swipe_date}")
+        print(f"Филиалов: {len(filial_data)}")
+        print(f"Контрагентов: {len(counterparty_data)}")
+
+        result = db.save_swipe_data(swipe_date, filial_data, counterparty_data, total_debt, total_overdue)
+        return result
+
+    except Exception as e:
+        print(f"❌ Ошибка API save-swipe-data: {e}")
+        traceback.print_exc()
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/swipe-dates', methods=['GET'])
+def api_swipe_dates():
+    """Возвращает список дат сверок за период"""
+    try:
+        from_date = request.args.get('from')
+        to_date = request.args.get('to')
+
+        dates = db.get_swipe_dates(from_date, to_date)
+        return {'success': True, 'data': dates}
+
+    except Exception as e:
+        print(f"❌ Ошибка API swipe-dates: {e}")
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/filial-trend', methods=['GET'])
+def api_filial_trend():
+    """Возвращает данные для графика динамики ПДЗ по филиалам"""
+    try:
+        from_date = request.args.get('from')
+        to_date = request.args.get('to')
+        filial = request.args.get('filial')
+
+        if not from_date or not to_date:
+            return {'error': 'Укажите период (from и to)'}, 400
+
+        result = db.get_filial_trend(from_date, to_date, filial)
+        return {'success': True, 'data': result}
+
+    except Exception as e:
+        print(f"❌ Ошибка API filial-trend: {e}")
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/counterparty-trend', methods=['GET'])
+def api_counterparty_trend():
+    """Возвращает данные для графика динамики по контрагентам"""
+    try:
+        from_date = request.args.get('from')
+        to_date = request.args.get('to')
+        filial = request.args.get('filial')
+        counterparty = request.args.get('counterparty')
+
+        if not from_date or not to_date:
+            return {'error': 'Укажите период (from и to)'}, 400
+
+        result = db.get_counterparty_trend(from_date, to_date, filial, counterparty)
+        return {'success': True, 'data': result}
+
+    except Exception as e:
+        print(f"❌ Ошибка API counterparty-trend: {e}")
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/filial-list', methods=['GET'])
+def api_filial_list():
+    """Возвращает список уникальных филиалов за период"""
+    try:
+        from_date = request.args.get('from')
+        to_date = request.args.get('to')
+
+        result = db.get_filial_list(from_date, to_date)
+        return {'success': True, 'data': result}
+
+    except Exception as e:
+        print(f"❌ Ошибка API filial-list: {e}")
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/counterparty-list', methods=['GET'])
+def api_counterparty_list():
+    """Возвращает список уникальных контрагентов"""
+    try:
+        filial = request.args.get('filial')
+        result = db.get_counterparty_list(filial)
+        return {'success': True, 'data': result}
+
+    except Exception as e:
+        print(f"❌ Ошибка API counterparty-list: {e}")
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/summary', methods=['GET'])
+def api_summary():
+    """Возвращает сводную статистику за период"""
+    try:
+        from_date = request.args.get('from')
+        to_date = request.args.get('to')
+
+        if not from_date or not to_date:
+            return {'error': 'Укажите период (from и to)'}, 400
+
+        result = db.get_summary(from_date, to_date)
+        if result:
+            return {'success': True, 'data': result}
+        else:
+            return {'success': True, 'data': None, 'message': 'Нет данных за указанный период'}
+
+    except Exception as e:
+        print(f"❌ Ошибка API summary: {e}")
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/delete-swipe', methods=['POST'])
+def api_delete_swipe():
+    """Удаляет данные сверки за указанную дату"""
+    try:
+        data = request.get_json()
+        swipe_date = data.get('date')
+
+        if not swipe_date:
+            return {'error': 'Не указана дата'}, 400
+
+        result = db.delete_swipe_data(swipe_date)
+        return result
+
+    except Exception as e:
+        print(f"❌ Ошибка API delete-swipe: {e}")
+        return {'error': str(e)}, 500
 
 
 if __name__ == '__main__':
