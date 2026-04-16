@@ -1,16 +1,1 @@
-# Временные файлы
-*.log
-*.tmp
-*.temp
-.DS_Store
-Thumbs.db
-
-# Файлы проекта
-temp.html
-.DS_Store
-
-# Папка git
-.git/
-venv/
-__pycache__/
-*.pyc
+Nothing needs to be added to .gitignore since only source files (app.js, styles.css) were modified and there are no build artifacts, dependencies, or temporary files in the changes.
