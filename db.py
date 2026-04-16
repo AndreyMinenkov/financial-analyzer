@@ -49,7 +49,12 @@ def save_swipe_data(swipe_date, filial_data, counterparty_data, total_debt=0, to
             RETURNING id
         """, (swipe_date, total_overdue, total_debt, len(filial_data), len(counterparty_data)))
 
-        swipe_id = cur.fetchone()[0]
+        swipe_row = cur.fetchone()
+        swipe_id = swipe_row[0] if swipe_row else None
+        
+        if not swipe_id:
+            raise Exception("Не удалось получить ID сверки")
+        
         conn.commit()
 
         # 2. Сохраняем данные по филиалам
