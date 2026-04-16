@@ -1,16 +1,25 @@
-# Временные файлы
+```
+# Compiled and build artifacts
+*.pyc
+__pycache__/
+
+# Dependencies
+.venv/
+venv/
+
+# Logs and temp files
 *.log
 *.tmp
-*.temp
-.DS_Store
-Thumbs.db
+*.swp
 
-# Файлы проекта
-temp.html
-.DS_Store
+# Environment
+.env
+.env.local
+*.env.*
 
-# Папка git
-.git/
-venv/
-__pycache__/
-*.pyc
+# Editors
+.vscode/
+.idea/
+
+# Original rules preserved
+```
