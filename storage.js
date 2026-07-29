@@ -6,7 +6,16 @@ class StorageManager {
         this.transactions = [];
         this.accounts = {};
         this.innData = {};
-        this.depositData = {};
+        this.depositData = {}; // Будет загружено асинхронно в initDeposits()
+        this.exclusionRules = [];
+        this.categorizationRules = [];
+        this.companyAliases = [];
+    }
+
+    // Асинхронная инициализация депозитов (вызывается из App.init())
+    async initDeposits() {
+        this.depositData = await this.loadDepositsFromServer();
+        await this.cleanExpiredDeposits();
     }
 
     // Управление файлами
@@ -47,8 +56,142 @@ class StorageManager {
     // Управление депозитами
     setDepositData(data) { this.depositData = data; }
     getDepositData() { return { ...this.depositData }; }
-    getDepositForAccount(account) { return this.depositData[account]; }
-    setDepositForAccount(account, data) { this.depositData[account] = data; }
+    getDepositForAccount(account) {
+        const raw = this.depositData[account];
+        if (!raw) return [];
+        // Обратная совместимость: старый формат {amount,rate,startDate} → массив
+        if (!Array.isArray(raw)) return [raw];
+        return raw;
+    }
+    setDepositForAccount(account, data) {
+        // data может быть массивом или объектом (обратная совместимость)
+        this.depositData[account] = Array.isArray(data) ? data : [data];
+    }
+
+    // Сохранение срочных депозитов в БД через API (с fallback на localStorage)
+    async syncDepositsToServer() {
+        // Собираем только срочные депозиты (с датой окончания)
+        const termDeposits = {};
+        Object.entries(this.depositData).forEach(([account, deposits]) => {
+            if (!Array.isArray(deposits)) return;
+            const termOnly = deposits.filter(d => d.endDate);
+            if (termOnly.length > 0) termDeposits[account] = termOnly;
+        });
+
+        const accountCount = Object.keys(termDeposits).length;
+        const totalDeps = Object.values(termDeposits).reduce((s, arr) => s + arr.length, 0);
+        console.log(`syncDepositsToServer: ${totalDeps} срочных депозитов на ${accountCount} счетах`, termDeposits);
+
+        // Fallback: всегда сохраняем в localStorage
+        try {
+            localStorage.setItem('termDeposits', JSON.stringify(termDeposits));
+            console.log('Срочные депозиты сохранены в localStorage');
+        } catch (e) {
+            console.warn('Не удалось сохранить в localStorage:', e);
+        }
+
+        // Основной путь: синхронизация с БД (merge, не полная замена)
+        try {
+            const resp = await fetch('/api/term-deposits/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ deposits: termDeposits })
+            });
+            const result = await resp.json();
+            if (result.success) {
+                console.log(`Срочные депозиты синхронизированы с БД: ${result.synced} записей`);
+            } else {
+                console.warn('Синхронизация с БД не удалась, данные в localStorage');
+            }
+        } catch (e) {
+            console.warn('БД недоступна — срочные депозиты только в localStorage:', e.message);
+        }
+    }
+
+    // Загрузка срочных депозитов из БД (с fallback на localStorage)
+    async loadDepositsFromServer() {
+        // Сначала пробуем БД
+        try {
+            const resp = await fetch('/api/term-deposits');
+            const result = await resp.json();
+            if (result.success && result.data) {
+                const fromDb = result.data;
+                const count = Object.values(fromDb).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
+                if (count > 0) {
+                    console.log(`Загружены срочные депозиты из БД: ${count} записей на ${Object.keys(fromDb).length} счетах`);
+                    return fromDb;
+                }
+            }
+        } catch (e) {
+            console.warn('Не удалось загрузить депозиты из БД:', e.message);
+        }
+
+        // Fallback: localStorage
+        try {
+            const stored = localStorage.getItem('termDeposits');
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                const count = Object.values(parsed).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
+                if (count > 0) {
+                    console.log(`Загружены срочные депозиты из localStorage: ${count} записей`);
+                    return parsed;
+                }
+            }
+        } catch (e) {
+            console.warn('Не удалось загрузить из localStorage:', e);
+        }
+
+        return {};
+    }
+
+    // Автоочистка истекших срочных депозитов
+    // endDate — первый день, когда депозит НЕ действует
+    // Удаляем только на следующий день после endDate (когда today > endDate)
+    async cleanExpiredDeposits() {
+        const today = new Date().toISOString().split('T')[0];
+        let cleaned = 0;
+
+        Object.entries(this.depositData).forEach(([account, deposits]) => {
+            if (!Array.isArray(deposits)) return;
+            // endDate — последний день действия, today > endDate означает что депозит истёк
+            const active = deposits.filter(d => !d.endDate || d.endDate >= today);
+            if (active.length !== deposits.length) {
+                cleaned += deposits.length - active.length;
+                if (active.length > 0) this.depositData[account] = active;
+                else delete this.depositData[account];
+            }
+        });
+
+        if (cleaned > 0) {
+            console.log(`Автоочистка: удалено ${cleaned} истекших депозитов`);
+            await this.syncDepositsToServer();
+        }
+    }
+    getExclusionRules() { return [...this.exclusionRules]; }
+
+    // Управление правилами категоризации
+    setCategorizationRules(rules) { this.categorizationRules = rules; }
+    getCategorizationRules() { return [...this.categorizationRules]; }
+
+    // Управление синонимами компаний
+    setCompanyAliases(aliases) { this.companyAliases = aliases; }
+    getCompanyAliases() { return [...this.companyAliases]; }
+
+    // Загрузка конфигурации с API
+    async loadConfig() {
+        try {
+            const resp = await fetch('/api/config');
+            const cfg = await resp.json();
+            if (cfg.success) {
+                this.accounts = cfg.data.account_mapping || {};
+                this.exclusionRules = cfg.data.exclusion_rules || [];
+                this.categorizationRules = cfg.data.categorization_rules || [];
+                this.companyAliases = cfg.data.company_aliases || [];
+                return true;
+            }
+        } catch (e) { console.warn('loadConfig failed:', e); }
+        return false;
+    }
 
     // Вспомогательные методы
     formatCurrency(amount) {

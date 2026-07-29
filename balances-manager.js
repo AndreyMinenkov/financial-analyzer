@@ -1,8 +1,9 @@
-// balances-manager.js - Управление страницей остатков
+// balances-manager.js — Управление страницей остатков
 class BalancesManager {
     constructor(storage) {
         this.storage = storage;
         this.editingAccount = null;
+        this.editingDeposits = []; // временный массив депозитов для модального окна
         this.init();
     }
 
@@ -12,230 +13,236 @@ class BalancesManager {
     }
 
     setupEventListeners() {
-        // Делегирование событий для редактируемых ячеек
         document.getElementById('balancesTableBody').addEventListener('click', (e) => {
             const cell = e.target.closest('.editable');
             if (cell && cell.dataset.account) {
                 this.openEditModal(cell.dataset.account, cell.dataset.field);
             }
         });
+
+        const searchInput = document.getElementById('balancesSearchInput');
+        const clearBtn = document.getElementById('balancesClearSearchBtn');
+        if (searchInput) searchInput.addEventListener('input', () => this.filterTable(searchInput.value));
+        if (clearBtn) clearBtn.addEventListener('click', () => { searchInput.value = ''; this.filterTable(''); });
+    }
+
+    filterTable(query) {
+        const tbody = document.getElementById('balancesTableBody');
+        const rows = tbody.querySelectorAll('tr:not(.empty-row)');
+        const term = query.toLowerCase().trim();
+        let visibleCount = 0;
+        rows.forEach(row => {
+            row.style.display = (!term || row.textContent.toLowerCase().includes(term)) ? '' : 'none';
+            if (row.style.display !== 'none') visibleCount++;
+        });
+        document.getElementById('totalAccountsCount').textContent = visibleCount;
     }
 
     updateTable() {
         const accounts = this.storage.getAccounts();
         const accountNumbers = Object.keys(accounts);
-
         const tbody = document.getElementById('balancesTableBody');
-
         if (accountNumbers.length === 0) {
-            tbody.innerHTML = `
-                <tr class="empty-row">
-                    <td colspan="9">
-                        ${this.storage.getStatements().length === 0
-                            ? 'Загрузите выписки на странице "Загрузка выписок"'
-                            : 'Нет данных об остатках'}
-                    </td>
-                </tr>
-            `;
+            tbody.innerHTML = `<tr class="empty-row"><td colspan="9">Нет счетов. Добавьте счета в разделе «Настройки» → «Счета».</td></tr>`;
             return;
         }
 
-        let html = '';
-        let totalBalance = 0;
-        let totalDeposit = 0;
-        let totalInterest = 0;
-
+        let html = '', totalBalance = 0, totalDeposit = 0, totalInterest = 0;
         accountNumbers.forEach(accountNumber => {
             const account = accounts[accountNumber];
-            const depositData = this.storage.getDepositForAccount(accountNumber);
-
-            // Получаем самые свежие данные по счету
+            const deposits = this.storage.getDepositForAccount(accountNumber);
             const latestStatement = this.getLatestStatementForAccount(accountNumber);
             const balance = latestStatement?.balance || account?.balance || 0;
-            const statementDate = latestStatement?.date || account?.date || '';
+            const rawDate = new Date().toISOString().split('T')[0];
+            const statementDate = rawDate.split('-').reverse().join('.');
 
-            // Данные по депозиту
-            const depositAmount = depositData?.amount || 0;
-            const interestRate = depositData?.rate || 0;
-            const depositStartDate = depositData?.startDate || '';
+            const result = this.calculateInterestAndRealBalance(accountNumber, balance, deposits);
+            const { realBalance, unlockedAmount, unlockedInterest, isFrozen } = result;
 
-            // Расчет процентов и реального остатка
-            const { interest, realBalance } = this.calculateInterestAndRealBalance(
-                accountNumber, balance, depositAmount, interestRate, depositStartDate
-            );
-
-            // Форматирование чисел
             const balanceFormatted = this.storage.formatNumber(balance);
-            const depositFormatted = depositAmount > 0 ? this.storage.formatNumber(depositAmount) : '';
-            const interestFormatted = interest > 0 ? this.storage.formatNumber(interest) : '';
+            const depositFormatted = unlockedAmount > 0 ? this.storage.formatNumber(unlockedAmount) : '';
+            const interestFormatted = unlockedInterest > 0 ? this.storage.formatNumber(unlockedInterest) : '';
             const realBalanceFormatted = this.storage.formatNumber(realBalance);
 
-            // Суммирование итогов
-            totalBalance += balance;
-            totalDeposit += depositAmount;
-            totalInterest += interest;
+            const calcDate = document.getElementById('calculationDate').value;
+            const unlockedDeposits = deposits.filter(d => {
+                if (!d.amount || d.amount <= 0) return false;
+                if (!d.endDate) return true;
+                return calcDate >= d.endDate;
+            });
+            const rateDisplay = unlockedDeposits.length > 0 ? unlockedDeposits.map(d => d.rate || 0).join('% / ') + '%' : '';
 
-            html += `
-                <tr>
-                    <td>${account.company || ''}</td>
-                    <td>${account.bank || ''}</td>
-                    <td>${accountNumber}</td>
-                    <td class="number-cell">${balanceFormatted}</td>
-                    <td class="number-cell editable" data-account="${accountNumber}" data-field="amount">
-                        ${depositFormatted}
-                    </td>
-                    <td class="number-cell editable" data-account="${accountNumber}" data-field="rate">
-                        ${interestRate > 0 ? interestRate.toFixed(2) + '%' : ''}
-                    </td>
-                    <td class="number-cell">${interestFormatted}</td>
-                    <td class="number-cell">${realBalanceFormatted}</td>
-                    <td>${statementDate}</td>
-                </tr>
-            `;
+            totalBalance += balance;
+            totalDeposit += unlockedAmount;
+            totalInterest += unlockedInterest;
+
+            const frozenClass = isFrozen ? ' class="deposit-frozen"' : '';
+            let frozenTitle = '';
+            if (isFrozen) {
+                const totalAll = deposits.reduce((s, d) => s + (d.amount || 0), 0);
+                const frozenSum = totalAll - unlockedAmount;
+                const frozenDep = deposits.find(d => d.endDate && d.amount > 0);
+                if (frozenDep) frozenTitle = ` title="Заморожен срочный депозит на ${this.storage.formatNumber(frozenSum)} ₽ до ${frozenDep.endDate}"`;
+            }
+
+            html += `<tr${frozenClass}${frozenTitle}><td>${account.company || ''}</td><td>${account.bank || ''}</td><td>${accountNumber}</td><td class="number-cell">${balanceFormatted}</td><td class="number-cell editable" data-account="${accountNumber}" data-field="amount">${depositFormatted}</td><td class="number-cell editable" data-account="${accountNumber}" data-field="rate">${rateDisplay}</td><td class="number-cell">${interestFormatted}</td><td class="number-cell">${realBalanceFormatted}</td><td>${statementDate}</td></tr>`;
         });
 
         tbody.innerHTML = html;
-
-        // Обновляем итоги
         this.updateSummary(totalBalance, totalDeposit, totalInterest, accountNumbers.length);
     }
 
-    calculateInterestAndRealBalance(accountNumber, balance, depositAmount, interestRate, depositStartDate) {
-        let interest = 0;
-        let realBalance = balance;
+    calculateInterestAndRealBalance(accountNumber, balance, deposits) {
+        const result = { interest: 0, realBalance: balance, isFrozen: false, unlockedAmount: 0, unlockedInterest: 0 };
+        if (!Array.isArray(deposits) || deposits.length === 0) return result;
 
-        // Счета банка МИБ - особый расчет
+        const calculationDate = document.getElementById('calculationDate').value;
+        if (!calculationDate) return result;
+
         const mibAccounts = ['40702810700990012381', '40702810100990012143'];
+        const isMib = mibAccounts.includes(accountNumber);
 
-        if (mibAccounts.includes(accountNumber)) {
-            // Для МИБ: реальный остаток = конечный остаток по выписке + начисленные проценты
-            // Сумма депозита отображается только информационно, не добавляется к остатку
-            if (depositAmount > 0 && interestRate > 0 && depositStartDate) {
-                const calculationDate = document.getElementById('calculationDate').value;
-                const days = this.storage.getDaysBetween(depositStartDate, calculationDate);
-                if (days > 0) {
-                    interest = this.storage.calculateInterest(depositAmount, interestRate, days);
-                    realBalance = balance + interest; // Только проценты добавляются к остатку
-                }
+        let totalInterest = 0, unlockedBody = 0, unlockedInt = 0, hasFrozen = false, anyDepositActive = false;
+
+        deposits.forEach(dep => {
+            const amount = dep.amount || 0, rate = dep.rate || 0, startDate = dep.startDate || '', endDate = dep.endDate || null;
+            if (amount <= 0) return;
+
+            // Определяем заморозку до проверки days — депозит заморожен,
+            // даже если расчётная дата ещё не достигла даты начала.
+            // endDate — первый день, когда депозит уже НЕ действует
+            if (endDate && calculationDate < endDate) {
+                hasFrozen = true;
             }
-            return { interest, realBalance };
-        }
 
-        // Обычные счета: реальный остаток = конечный остаток по выписке + сумма депозита + начисленные проценты
-        if (depositAmount > 0 && interestRate > 0 && depositStartDate) {
-            const calculationDate = document.getElementById('calculationDate').value;
-            const days = this.storage.getDaysBetween(depositStartDate, calculationDate);
+            if (!startDate) return;
 
-            if (days > 0) {
-                interest = this.storage.calculateInterest(depositAmount, interestRate, days);
-                realBalance = balance + depositAmount + interest; // Депозит + проценты
+            const days = this.storage.getDaysBetween(startDate, calculationDate);
+            if (days <= 0) return;
+
+            anyDepositActive = true;
+            const interest = this.storage.calculateInterest(amount, rate, days);
+            totalInterest += interest;
+
+            // endDate — первый день, когда депозит уже НЕ действует
+            if (!endDate || calculationDate >= endDate) {
+                unlockedBody += amount;
+                unlockedInt += interest;
             }
-        }
+        });
 
-        return { interest, realBalance };
+        result.isFrozen = hasFrozen;
+        if (!anyDepositActive) return result;
+
+        result.interest = totalInterest;
+        result.unlockedAmount = unlockedBody;
+        result.unlockedInterest = unlockedInt;
+        result.realBalance = balance + unlockedBody + unlockedInt;
+        if (isMib) result.realBalance = balance + unlockedInt;
+
+        return result;
     }
 
     getLatestStatementForAccount(accountNumber) {
-        const statements = this.storage.getStatements();
-        const accountStatements = statements.filter(s => s.account === accountNumber);
-
-        if (accountStatements.length === 0) return null;
-
-        // Сортируем по дате (от новых к старым)
-        accountStatements.sort((a, b) => {
-            const dateA = this.storage.parseDate(a.date);
-            const dateB = this.storage.parseDate(b.date);
-            return dateB - dateA;
-        });
-
-        return accountStatements[0];
+        const statements = this.storage.getStatements().filter(s => s.account === accountNumber);
+        if (statements.length === 0) return null;
+        statements.sort((a, b) => this.storage.parseDate(b.date) - this.storage.parseDate(a.date));
+        return statements[0];
     }
 
     updateSummary(totalBalance, totalDeposit, totalInterest, accountCount) {
         document.getElementById('totalAccountsCount').textContent = accountCount;
-        document.getElementById('totalBalanceAmount').textContent =
-            this.storage.formatCurrency(totalBalance);
-        document.getElementById('totalInterestsAmount').textContent =
-            this.storage.formatCurrency(totalInterest);
+        document.getElementById('totalBalanceAmount').textContent = this.storage.formatCurrency(totalBalance);
+        document.getElementById('totalInterestsAmount').textContent = this.storage.formatCurrency(totalInterest);
     }
 
     openEditModal(accountNumber, field) {
         const accounts = this.storage.getAccounts();
         const account = accounts[accountNumber];
-        const depositData = this.storage.getDepositForAccount(accountNumber) || {};
-
-        // Заполняем форму
+        const deposits = this.storage.getDepositForAccount(accountNumber);
+        this.editingAccount = accountNumber;
+        this.editingDeposits = deposits.map(d => ({ ...d }));
         document.getElementById('editCompany').value = account?.company || '';
         document.getElementById('editAccount').value = accountNumber;
-        document.getElementById('editDepositAmount').value = depositData.amount || '';
-        document.getElementById('editInterestRate').value = depositData.rate || '';
-        document.getElementById('editStartDate').value = depositData.startDate || '';
-
-        // Сохраняем редактируемый счет
-        this.editingAccount = accountNumber;
-
-        // Показываем модальное окно
+        this.renderDepositList();
         document.getElementById('depositModal').classList.add('active');
     }
 
-    saveDeposit() {
+    renderDepositList() {
+        const container = document.getElementById('depositListContainer');
+        if (!container) return;
+        if (this.editingDeposits.length === 0) {
+            container.innerHTML = '<p style="color: var(--text-tertiary); font-size: 13px; text-align: center; padding: 12px;">Нет депозитов. Нажмите «Добавить депозит».</p>';
+            return;
+        }
+        let html = '';
+        this.editingDeposits.forEach((dep, index) => {
+            const isFrozen = dep.endDate ? ' (срочный)' : ' (обычный)';
+            html += `<div class="deposit-item" style="display: flex; gap: 8px; align-items: flex-end; margin-bottom: 12px; padding: 12px; background: var(--bg-tertiary); border-radius: var(--radius-sm);"><div style="flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;"><div><label style="font-size: 10px; color: var(--text-secondary); display: block;">Сумма</label><input type="number" class="dep-amount" data-index="${index}" value="${dep.amount || ''}" step="0.01" style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-light); border-radius: 4px; font-size: 12px;"></div><div><label style="font-size: 10px; color: var(--text-secondary); display: block;">Ставка, %</label><input type="number" class="dep-rate" data-index="${index}" value="${dep.rate || ''}" step="0.01" style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-light); border-radius: 4px; font-size: 12px;"></div><div><label style="font-size: 10px; color: var(--text-secondary); display: block;">Дата начала</label><input type="date" class="dep-start" data-index="${index}" value="${dep.startDate || ''}" style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-light); border-radius: 4px; font-size: 12px;"></div><div><label style="font-size: 10px; color: var(--text-secondary); display: block;">Дата окончания${isFrozen}</label><input type="date" class="dep-end" data-index="${index}" value="${dep.endDate || ''}" style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-light); border-radius: 4px; font-size: 12px;"></div></div><button class="btn btn-sm btn-danger remove-deposit-btn" data-index="${index}" title="Удалить депозит" style="flex-shrink: 0; height: 30px;">✕</button></div>`;
+        });
+        container.innerHTML = html;
+        container.querySelectorAll('.remove-deposit-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.editingDeposits.splice(parseInt(btn.dataset.index), 1);
+                this.renderDepositList();
+            });
+        });
+    }
+
+    async saveDeposit() {
         if (!this.editingAccount) return;
-
-        const amount = parseFloat(document.getElementById('editDepositAmount').value) || 0;
-        const rate = parseFloat(document.getElementById('editInterestRate').value) || 0;
-        const startDate = document.getElementById('editStartDate').value;
-
-        const depositData = {
-            amount: amount,
-            rate: rate,
-            startDate: startDate
-        };
-
-        this.storage.setDepositForAccount(this.editingAccount, depositData);
-
-        // Закрываем модальное окно
+        const container = document.getElementById('depositListContainer');
+        const updatedDeposits = [];
+        this.editingDeposits.forEach((dep, index) => {
+            const amountEl = container.querySelector(`.dep-amount[data-index="${index}"]`);
+            if (!amountEl) return;
+            const amount = parseFloat(amountEl.value) || 0;
+            const rate = parseFloat(container.querySelector(`.dep-rate[data-index="${index}"]`)?.value) || 0;
+            const startDate = container.querySelector(`.dep-start[data-index="${index}"]`)?.value || '';
+            const endDate = container.querySelector(`.dep-end[data-index="${index}"]`)?.value || null;
+            if (amount > 0 && rate > 0) updatedDeposits.push({ amount, rate, startDate, endDate: endDate || null });
+        });
+        this.storage.setDepositForAccount(this.editingAccount, updatedDeposits);
+        // Синхронизируем с БД
+        await this.storage.syncDepositsToServer();
         document.getElementById('depositModal').classList.remove('active');
         this.editingAccount = null;
-
-        // Обновляем таблицу
+        this.editingDeposits = [];
         this.updateTable();
+        window.app.showNotification('Данные по депозитам сохранены', 'success');
+    }
 
-        window.app.showNotification('Данные по депозиту сохранены', 'success');
+    addDeposit() {
+        this.editingDeposits.push({ amount: 0, rate: 0, startDate: '', endDate: null });
+        this.renderDepositList();
     }
 
     calculateInterests() {
-        const calculationDate = document.getElementById('calculationDate').value;
-        if (!calculationDate) {
-            alert('Пожалуйста, укажите дату расчета');
-            return;
-        }
-
+        if (!document.getElementById('calculationDate').value) { alert('Пожалуйста, укажите дату расчета'); return; }
         this.updateTable();
         window.app.showNotification('Проценты рассчитаны', 'success');
     }
 
+    // Мержит депозит из Excel с существующими срочными депозитами
+    mergeExcelDeposit(account, excelDeposit) {
+        const existing = this.storage.getDepositForAccount(account);
+        const termOnly = existing.filter(d => d.endDate); // сохраняем срочные
+        termOnly.push({ ...excelDeposit, endDate: null });
+        this.storage.setDepositForAccount(account, termOnly);
+    }
+
     async loadDepositData(file) {
         if (!file) return;
-
         try {
-            console.log('Загрузка файла депозитов:', file.name, 'тип:', file.type);
-
             if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
                 await this.loadExcelDepositData(file);
             } else {
                 const text = await this.readFile(file);
                 const depositData = this.parseDepositData(text);
-
-                // Сохраняем данные по депозитам
-                Object.entries(depositData).forEach(([account, data]) => {
-                    this.storage.setDepositForAccount(account, data);
-                });
-
+                Object.entries(depositData).forEach(([account, data]) => this.mergeExcelDeposit(account, data));
                 window.app.showNotification(`Загружены данные по ${Object.keys(depositData).length} депозитам`, 'success');
             }
-
             this.updateTable();
-
         } catch (error) {
             console.error('Error loading deposit data:', error);
             window.app.showNotification('Ошибка загрузки данных по депозитам', 'error');
@@ -244,19 +251,10 @@ class BalancesManager {
 
     async loadExcelDepositData(file) {
         try {
-            console.log('Начало обработки Excel файла');
             const workbook = await this.readExcelFile(file);
             const depositData = this.parseDepositDataFromExcel(workbook);
-
-            console.log('Найдено счетов с депозитами:', Object.keys(depositData).length);
-
-            // Сохраняем данные по депозитам
-            Object.entries(depositData).forEach(([account, data]) => {
-                this.storage.setDepositForAccount(account, data);
-            });
-
+            Object.entries(depositData).forEach(([account, data]) => this.mergeExcelDeposit(account, data));
             window.app.showNotification(`Загружены данные по ${Object.keys(depositData).length} депозитам из Excel`, 'success');
-
         } catch (error) {
             console.error('Ошибка обработки Excel файла:', error);
             throw new Error('Ошибка обработки Excel файла: ' + error.message);
@@ -267,146 +265,55 @@ class BalancesManager {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => {
-                try {
-                    console.log('Чтение Excel файла завершено');
-                    const data = new Uint8Array(e.target.result);
-                    const workbook = XLSX.read(data, { type: 'array' });
-                    resolve(workbook);
-                } catch (error) {
-                    console.error('Ошибка парсинга Excel:', error);
-                    reject(new Error('Ошибка чтения Excel файла: ' + error.message));
-                }
+                try { resolve(XLSX.read(new Uint8Array(e.target.result), { type: 'array' })); }
+                catch (error) { reject(new Error('Ошибка чтения Excel файла: ' + error.message)); }
             };
-            reader.onerror = (e) => {
-                console.error('Ошибка чтения файла:', e);
-                reject(new Error('Ошибка чтения файла'));
-            };
+            reader.onerror = () => reject(new Error('Ошибка чтения файла'));
             reader.readAsArrayBuffer(file);
         });
     }
 
     parseDepositDataFromExcel(workbook) {
         const depositData = {};
-
-        // Ищем лист "Свод"
-        let sheetName = workbook.SheetNames.find(name =>
-            name.toLowerCase().includes('свод')
-        ) || workbook.SheetNames[0];
-
-        console.log('Используем лист:', sheetName);
+        let sheetName = workbook.SheetNames.find(n => n.toLowerCase().includes('свод')) || workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-
-        // Ищем заголовки
-        let accountCol = 1; // Столбец B по умолчанию
-        let amountCol = 2;  // Столбец C
-        let rateCol = 3;    // Столбец D
-        let startDateCol = 5; // Столбец F
-
+        let accountCol = 1, amountCol = 2, rateCol = 3, startDateCol = 5;
         if (jsonData.length > 0) {
-            const headerRow = jsonData[0];
-            for (let i = 0; i < headerRow.length; i++) {
-                const cellValue = String(headerRow[i] || '').toLowerCase();
-                if (cellValue.includes('счет') || cellValue.includes('номер')) accountCol = i;
-                if (cellValue.includes('сумма') && cellValue.includes('депозит')) amountCol = i;
-                if (cellValue.includes('ставка')) rateCol = i;
-                if (cellValue.includes('дата') && cellValue.includes('начал')) startDateCol = i;
+            const h = jsonData[0];
+            for (let i = 0; i < h.length; i++) {
+                const v = String(h[i] || '').toLowerCase();
+                if (v.includes('счет') || v.includes('номер')) accountCol = i;
+                if (v.includes('сумма') && v.includes('депозит')) amountCol = i;
+                if (v.includes('ставка')) rateCol = i;
+                if (v.includes('дата') && v.includes('начал')) startDateCol = i;
             }
         }
-
-        console.log('Столбцы для парсинга:', { accountCol, amountCol, rateCol, startDateCol });
-
-        // Обрабатываем строки
         for (let i = 1; i < jsonData.length; i++) {
             const row = jsonData[i];
-            if (!row || row.length <= Math.max(accountCol, amountCol, rateCol, startDateCol)) {
-                continue;
-            }
-
-            const accountRaw = String(row[accountCol] || '').trim();
-            const amountRaw = row[amountCol];
-            const rateRaw = row[rateCol];
-            const startDateRaw = row[startDateCol];
-
-            console.log(`Строка ${i}:`, { accountRaw, amountRaw, rateRaw, startDateRaw });
-
-            // Извлекаем номер счета (20 цифр)
-            const accountMatch = accountRaw.match(/\d{20}/);
-            if (!accountMatch) {
-                console.log(`Не найден номер счета в строке ${i}: "${accountRaw}"`);
-                continue;
-            }
-
+            if (!row || row.length <= Math.max(accountCol, amountCol, rateCol, startDateCol)) continue;
+            const accountMatch = String(row[accountCol] || '').trim().match(/\d{20}/);
+            if (!accountMatch) continue;
             const account = accountMatch[0];
-
-            // Парсим сумму - только числа
             let amount = 0;
-            if (amountRaw !== undefined && amountRaw !== null && amountRaw !== '') {
-                if (typeof amountRaw === 'number') {
-                    amount = amountRaw;
-                } else {
-                    const amountStr = String(amountRaw);
-                    // Удаляем все не-цифры, кроме точки и минуса
-                    const cleanStr = amountStr.replace(/[^\d.-]/g, '');
-                    amount = parseFloat(cleanStr.replace(',', '.')) || 0;
-                }
-            }
-
-            // Парсим ставку - только числа
+            const rawA = row[amountCol];
+            if (rawA !== undefined && rawA !== null && rawA !== '') amount = typeof rawA === 'number' ? rawA : parseFloat(String(rawA).replace(/[^\d.-]/g, '').replace(',', '.')) || 0;
             let rate = 0;
-            if (rateRaw !== undefined && rateRaw !== null && rateRaw !== '') {
-                if (typeof rateRaw === 'number') {
-                    rate = rateRaw;
-                } else {
-                    const rateStr = String(rateRaw);
-                    // Удаляем все не-цифры, кроме точки и минуса
-                    const cleanStr = rateStr.replace(/[^\d.-]/g, '');
-                    rate = parseFloat(cleanStr.replace(',', '.')) || 0;
-                }
-            }
-
-            // Парсим дату
+            const rawR = row[rateCol];
+            if (rawR !== undefined && rawR !== null && rawR !== '') rate = typeof rawR === 'number' ? rawR : parseFloat(String(rawR).replace(/[^\d.-]/g, '').replace(',', '.')) || 0;
             let startDate = '';
-            if (startDateRaw !== undefined && startDateRaw !== null && startDateRaw !== '') {
-                if (typeof startDateRaw === 'number') {
-                    // Даты Excel (число дней с 1 января 1900)
-                    const date = new Date((startDateRaw - 25569) * 86400 * 1000);
-                    startDate = date.toISOString().split('T')[0];
-                } else if (typeof startDateRaw === 'string') {
-                    const str = startDateRaw.trim();
-                    // Проверяем разные форматы дат
-                    if (str.match(/^\d{4}-\d{2}-\d{2}$/)) {
-                        startDate = str; // YYYY-MM-DD
-                    } else if (str.match(/^\d{2}\.\d{2}\.\d{4}$/)) {
-                        // DD.MM.YYYY
-                        const parts = str.split('.');
-                        const date = new Date(parts[2], parts[1] - 1, parts[0]);
-                        startDate = date.toISOString().split('T')[0];
-                    } else {
-                        // Пробуем как обычную дату
-                        const date = new Date(str);
-                        if (!isNaN(date.getTime())) {
-                            startDate = date.toISOString().split('T')[0];
-                        }
-                    }
+            const rawD = row[startDateCol];
+            if (rawD !== undefined && rawD !== null && rawD !== '') {
+                if (typeof rawD === 'number') startDate = new Date((rawD - 25569) * 86400 * 1000).toISOString().split('T')[0];
+                else if (typeof rawD === 'string') {
+                    const s = rawD.trim();
+                    if (s.match(/^\d{4}-\d{2}-\d{2}$/)) startDate = s;
+                    else if (s.match(/^\d{2}\.\d{2}\.\d{4}$/)) { const p = s.split('.'); startDate = `${p[2]}-${p[1]}-${p[0]}`; }
+                    else { const d = new Date(s); if (!isNaN(d.getTime())) startDate = d.toISOString().split('T')[0]; }
                 }
             }
-
-            // Сохраняем только если есть депозит (сумма > 0) И ставка > 0
-            if (account && amount > 0 && rate > 0) {
-                depositData[account] = {
-                    amount: amount,
-                    rate: rate,
-                    startDate: startDate || new Date().toISOString().split('T')[0]
-                };
-
-                console.log(`✓ Счет ${account}: сумма=${amount}, ставка=${rate}%, дата начала=${depositData[account].startDate}`);
-            } else {
-                console.log(`✗ Счет ${account}: сумма=${amount}, ставка=${rate}% (не сохраняем)`);
-            }
+            if (account && amount > 0 && rate > 0) depositData[account] = { amount, rate, startDate: startDate || new Date().toISOString().split('T')[0], endDate: null };
         }
-
-        console.log('Итого найдено счетов с депозитами:', Object.keys(depositData).length);
         return depositData;
     }
 
@@ -414,183 +321,63 @@ class BalancesManager {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => resolve(e.target.result);
-            reader.onerror = (e) => reject(new Error('Ошибка чтения файла'));
+            reader.onerror = () => reject(new Error('Ошибка чтения файла'));
             reader.readAsText(file, 'UTF-8');
         });
     }
 
     parseDepositData(text) {
-        const lines = text.split('\n');
         const depositData = {};
-
-        lines.forEach(line => {
-            const trimmed = line.trim();
-            if (!trimmed) return;
-
-            // Пробуем разные форматы: счет, сумма, ставка, дата начала
-            const parts = trimmed.split(/[\t,;]/).map(p => p.trim());
-
+        text.split('\n').forEach(line => {
+            const t = line.trim();
+            if (!t) return;
+            const parts = t.split(/[\t,;]/).map(p => p.trim());
             if (parts.length >= 3) {
                 const account = parts[0].replace(/\s/g, '');
                 const amount = parseFloat(parts[1].replace(',', '.')) || 0;
                 const rate = parseFloat(parts[2].replace(',', '.')) || 0;
-                const startDate = parts[3] || '';
-
-                if (account && amount > 0 && rate > 0) {
-                    depositData[account] = {
-                        amount: amount,
-                        rate: rate,
-                        startDate: startDate
-                    };
-                }
+                if (account && amount > 0 && rate > 0) depositData[account] = { amount, rate, startDate: parts[3] || '', endDate: null };
             }
         });
-
         return depositData;
     }
 
     exportToExcel() {
         const accounts = this.storage.getAccounts();
         const accountNumbers = Object.keys(accounts);
+        if (accountNumbers.length === 0) { alert('Нет данных для экспорта'); return; }
 
-        if (accountNumbers.length === 0) {
-            alert('Нет данных для экспорта');
-            return;
-        }
-
-        const calculationDate = document.getElementById('calculationDate').value;
-
-        // Сортируем счета по порядку из accountMapping
-        let sortedAccountNumbers = [...accountNumbers];
+        let sorted = [...accountNumbers];
         try {
             const parser = new BankStatementParser();
-            const accountMapping = parser.loadAccountMapping();
-            const accountOrder = Object.keys(accountMapping);
+            const order = Object.keys(parser.loadAccountMapping());
+            sorted.sort((a, b) => { const ia = order.indexOf(a), ib = order.indexOf(b); if (ia !== -1 && ib !== -1) return ia - ib; if (ia !== -1) return -1; if (ib !== -1) return 1; return a.localeCompare(b); });
+        } catch (e) {}
 
-            sortedAccountNumbers.sort((a, b) => {
-                const indexA = accountOrder.indexOf(a);
-                const indexB = accountOrder.indexOf(b);
+        const data = [['Компания', 'Банк', 'Счёт', 'Остаток по выписке', 'Вернувшийся депозит', 'Начисленные проценты', 'Реальный остаток', 'Дата']];
+        let totalBalance = 0, totalDeposit = 0, totalInterest = 0, totalRealBalance = 0;
 
-                if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-                if (indexA !== -1) return -1;
-                if (indexB !== -1) return 1;
-                return a.localeCompare(b);
-            });
-        } catch (error) {
-            console.warn('Не удалось отсортировать счета:', error);
-        }
-
-        // Подготовка данных для Excel (без столбца "Ставка, %")
-        const data = [
-            ['Компания', 'Банк', 'Счёт', 'Остаток по выписке', 'Вернувшийся депозит',
-             'Начисленные проценты', 'Реальный остаток', 'Дата']
-        ];
-
-        // Переменные для суммирования итогов
-        let totalBalance = 0;
-        let totalDeposit = 0;
-        let totalInterest = 0;
-        let totalRealBalance = 0;
-
-        sortedAccountNumbers.forEach(accountNumber => {
+        sorted.forEach(accountNumber => {
             const account = accounts[accountNumber];
-            const depositData = this.storage.getDepositForAccount(accountNumber);
-
-            // Получаем самые свежие данные
+            const deposits = this.storage.getDepositForAccount(accountNumber);
             const latestStatement = this.getLatestStatementForAccount(accountNumber);
             const balance = latestStatement?.balance || account?.balance || 0;
-            const statementDate = latestStatement?.date || account?.date || '';
-
-            // Данные по депозиту
-            const depositAmount = depositData?.amount || 0;
-            const interestRate = depositData?.rate || 0;
-            const depositStartDate = depositData?.startDate || '';
-
-            // Расчет процентов и реального остатка
-            const { interest, realBalance } = this.calculateInterestAndRealBalance(
-                accountNumber, balance, depositAmount, interestRate, depositStartDate
-            );
-
-            data.push([
-                account.company || '',
-                account.bank || '',
-                accountNumber,
-                balance,           // Число (не строка)
-                depositAmount,     // Число (не строка)
-                interest,          // Число (не строка)
-                realBalance,       // Число (не строка)
-                statementDate,
-                depositStartDate,
-                calculationDate
-            ]);
-
-            // Суммируем для итогов
-            totalBalance += balance;
-            totalDeposit += depositAmount;
-            totalInterest += interest;
-            totalRealBalance += realBalance;
+            const rawDate = new Date().toISOString().split('T')[0];
+            const statementDate = rawDate.split('-').reverse().join('.');
+            const { realBalance, unlockedAmount, unlockedInterest } = this.calculateInterestAndRealBalance(accountNumber, balance, deposits);
+            data.push([account.company || '', account.bank || '', accountNumber, balance, unlockedAmount, unlockedInterest, realBalance, statementDate]);
+            totalBalance += balance; totalDeposit += unlockedAmount; totalInterest += unlockedInterest; totalRealBalance += realBalance;
         });
 
-        // Добавляем итоговую строку
-        data.push([
-            'ИТОГО',
-            '',
-            '',
-            totalBalance,
-            totalDeposit,
-            totalInterest,
-            totalRealBalance,
-            '',
-            '',
-            ''
-        ]);
-
-        // Создание книги Excel
+        data.push(['ИТОГО', '', '', totalBalance, totalDeposit, totalInterest, totalRealBalance, '']);
         const ws = XLSX.utils.aoa_to_sheet(data);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Остатки');
-
-        // Настройка ширины колонок
-        const colWidths = [
-            { wch: 30 }, // Компания
-            { wch: 15 }, // Банк
-            { wch: 20 }, // Счет
-            { wch: 20 }, // Остаток
-            { wch: 15 }, // Вернувшийся депозит
-            { wch: 15 }, // Начисленные проценты
-            { wch: 20 }, // Реальный остаток
-            { wch: 12 } // Дата
-        ];
-        ws['!cols'] = colWidths;
-
-        // Применяем числовой формат к денежным столбцам (D, E, F, G - индексы 3, 4, 5, 6)
-        // Формат #,##0.00 отображает числа как 1 000 000,00
+        ws['!cols'] = [{ wch: 30 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 20 }, { wch: 12 }];
         const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
-        const moneyCols = [3, 4, 5, 6]; // Столбцы D, E, F, G
-
-        for (let col of moneyCols) {
-            for (let row = 1; row <= range.e.r; row++) {
-                const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
-                if (!ws[cellAddress]) continue;
-                
-                // Устанавливаем числовой тип и формат
-                ws[cellAddress].t = 'n';
-                ws[cellAddress].z = '#,##0.00';
-            }
-        }
-
-        // Выделяем итоговую строку жирным
-        const lastRow = range.e.r;
-        for (let col = 0; col <= 6; col++) {
-            const cellAddress = XLSX.utils.encode_cell({ r: lastRow, c: col });
-            if (!ws[cellAddress]) continue;
-            ws[cellAddress].s = { font: { bold: true } };
-        }
-
-        // Экспорт файла
-        const date = new Date().toISOString().slice(0, 10);
-        XLSX.writeFile(wb, `Остатки_${date}.xlsx`, { cellStyles: true });
-
-        window.app.showNotification(`Экспортировано ${sortedAccountNumbers.length} счетов`, 'success');
+        [3, 4, 5, 6].forEach(col => { for (let r = 1; r <= range.e.r; r++) { const c = XLSX.utils.encode_cell({ r, c: col }); if (ws[c]) { ws[c].t = 'n'; ws[c].z = '#,##0.00'; } } });
+        for (let col = 0; col <= 6; col++) { const c = XLSX.utils.encode_cell({ r: range.e.r, c: col }); if (ws[c]) ws[c].s = { font: { bold: true } }; }
+        XLSX.writeFile(wb, `Остатки_${new Date().toISOString().slice(0, 10)}.xlsx`, { cellStyles: true });
+        window.app.showNotification(`Экспортировано ${sorted.length} счетов`, 'success');
     }
 }

@@ -9,6 +9,12 @@ CREATE TABLE IF NOT EXISTS swipe_history (
     total_debt NUMERIC(20, 2) DEFAULT 0,       -- Общая дебиторская задолженность
     filial_count INT DEFAULT 0,                -- Количество филиалов
     counterparty_count INT DEFAULT 0,          -- Количество контрагентов
+    legal_dt NUMERIC(20, 2) DEFAULT 0,         -- Судебная задолженность ДТ
+    not_recoverable_dt NUMERIC(20, 2) DEFAULT 0, -- Не подлежащая взысканию ДТ
+    recoverable_dt NUMERIC(20, 2) DEFAULT 0,   -- Подлежащая взысканию ДТ
+    legal_siuat NUMERIC(20, 2) DEFAULT 0,      -- Судебная задолженность СИ УАТ
+    not_recoverable_siuat NUMERIC(20, 2) DEFAULT 0, -- Не подлежащая взысканию СИ УАТ
+    recoverable_siuat NUMERIC(20, 2) DEFAULT 0, -- Подлежащая взысканию СИ УАТ
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -45,7 +51,94 @@ CREATE INDEX IF NOT EXISTS idx_counterparty_filial ON counterparty_snapshots(fil
 CREATE INDEX IF NOT EXISTS idx_counterparty_name ON counterparty_snapshots(counterparty_name);
 CREATE INDEX IF NOT EXISTS idx_swipe_history_date ON swipe_history(swipe_date);
 
--- Комментарий
+-- Таблица 4: Маппинг расчётных счетов → компания + банк (настройки парсера выписок)
+CREATE TABLE IF NOT EXISTS account_mapping (
+    id SERIAL PRIMARY KEY,
+    account_number VARCHAR(20) NOT NULL UNIQUE,
+    company_name VARCHAR(255) NOT NULL,
+    bank_name VARCHAR(100) DEFAULT '',
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_mapping_number ON account_mapping(account_number);
+CREATE INDEX IF NOT EXISTS idx_account_mapping_company ON account_mapping(company_name);
+CREATE INDEX IF NOT EXISTS idx_account_mapping_active ON account_mapping(is_active);
+
+-- Таблица 5: Библиотека контрагентов (пояснения к платежам)
+CREATE TABLE IF NOT EXISTS contractors_library (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(500) NOT NULL UNIQUE,
+    organization VARCHAR(500) DEFAULT '',
+    explanation TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_contractors_library_name ON contractors_library(name);
+
+-- ============================================================
+-- НОВЫЕ ТАБЛИЦЫ: ГИБКИЕ НАСТРОЙКИ (аналог BankFlow settings)
+-- ============================================================
+
+-- Таблица 6: Правила исключения (фильтрация ненужных записей)
+CREATE TABLE IF NOT EXISTS exclusion_rules (
+    id SERIAL PRIMARY KEY,
+    rule_type VARCHAR(20) NOT NULL CHECK (rule_type IN ('purpose', 'counterparty')),
+    pattern VARCHAR(500) NOT NULL,
+    is_regex BOOLEAN DEFAULT false,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_exclusion_rules_type ON exclusion_rules(rule_type);
+
+-- Таблица 7: Правила категоризации (автоопределение категории по полю)
+CREATE TABLE IF NOT EXISTS categorization_rules (
+    id SERIAL PRIMARY KEY,
+    field VARCHAR(20) NOT NULL CHECK (field IN ('purpose', 'counterparty')),
+    pattern VARCHAR(500) NOT NULL,
+    display_name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_categorization_rules_field ON categorization_rules(field);
+
+-- Таблица 8: Синонимы компаний (унификация названий)
+CREATE TABLE IF NOT EXISTS company_aliases (
+    id SERIAL PRIMARY KEY,
+    pattern VARCHAR(500) NOT NULL,
+    canonical VARCHAR(255) NOT NULL,
+    match_type VARCHAR(20) DEFAULT 'contains' CHECK (match_type IN ('exact', 'contains', 'regex')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_aliases_canonical ON company_aliases(canonical);
+
+-- Таблица 9: Срочные депозиты (длинные) — сохраняются между сессиями
+CREATE TABLE IF NOT EXISTS term_deposits (
+    id SERIAL PRIMARY KEY,
+    account_number VARCHAR(20) NOT NULL,
+    amount NUMERIC(20, 2) NOT NULL DEFAULT 0,
+    rate NUMERIC(10, 4) NOT NULL DEFAULT 0,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_term_deposits_account ON term_deposits(account_number);
+CREATE INDEX IF NOT EXISTS idx_term_deposits_end_date ON term_deposits(end_date);
+
+-- Комментарии
 COMMENT ON TABLE swipe_history IS 'История сверок дебиторской задолженности — сводка по дате';
 COMMENT ON TABLE filial_snapshots IS 'Снимки данных по филиалам (ДТ) на дату сверки';
 COMMENT ON TABLE counterparty_snapshots IS 'Снимки данных по контрагентам на дату сверки (2-й уровень)';
+COMMENT ON TABLE account_mapping IS 'Маппинг расчётных счетов → компания и банк для парсера банковских выписок';
+COMMENT ON TABLE contractors_library IS 'Библиотека контрагентов — типовые пояснения к платежам поставщикам';
+COMMENT ON TABLE exclusion_rules IS 'Правила исключения транзакций из отчётов (фильтрация)';
+COMMENT ON TABLE categorization_rules IS 'Правила категоризации — автоопределение категории по содержимому поля';
+COMMENT ON TABLE company_aliases IS 'Синонимы названий компаний для унификации';

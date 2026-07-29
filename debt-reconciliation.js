@@ -55,6 +55,140 @@ class DebtReconciliationManager {
         };
     }
 
+    // ✅ НОВЫЙ МЕТОД: Загрузка данных предыдущего дня из БД через API
+    // ИЗМЕНЕНИЕ: Сервер теперь сам находит последнюю доступную дату, если запрошенная не найдена
+    // ИЗМЕНЕНИЕ 2: Теперь загружает также сводные данные (legal, notRecoverable, recoverable)
+    async loadPreviousDayDataFromAPI(requestedDate) {
+        try {
+            console.log(`📥 Загрузка данных за ${requestedDate} из БД...`);
+            
+            const response = await fetch(`http://31.130.155.16:5000/api/previous-day-data?date=${requestedDate}`);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.success && result.data && Object.keys(result.data).length > 0) {
+                const actualDate = result.date || requestedDate;
+                console.log(`✅ Загружено ${Object.keys(result.data).length} филиалов из БД за ${actualDate}`);
+                
+                // Сохраняем в localStorage для кэша и офлайн-работы с ПРАВИЛЬНОЙ датой
+                localStorage.setItem('previousDayDebt_manual', JSON.stringify({
+                    data: result.data,
+                    date: actualDate
+                }));
+                
+                // ✅ ИЗМЕНЕНИЕ: Загружаем сводные данные если они есть в ответе
+                if (result.summaryDT) {
+                    this.summaryDT = {
+                        legal: result.summaryDT.legal || 0,
+                        notRecoverable: result.summaryDT.notRecoverable || 0,
+                        recoverable: result.summaryDT.recoverable || 0
+                    };
+                    this.saveSummaryData();
+                    console.log('✅ Загружены сводные данные ДТ из БД');
+                }
+                
+                if (result.summarySIUAT) {
+                    this.summarySIUAT = {
+                        totalDebt: result.summarySIUAT.totalDebt || 0,
+                        totalOverdue: result.summarySIUAT.totalOverdue || 0,
+                        legal: result.summarySIUAT.legal || 0,
+                        notRecoverable: result.summarySIUAT.notRecoverable || 0,
+                        recoverable: result.summarySIUAT.recoverable || 0
+                    };
+                    this.saveSummaryData();
+                    console.log('✅ Загружены сводные данные СИ УАТ из БД');
+                }
+                
+                // Обновляем текущие данные
+                this.currentSubdivisionData = result.data;
+                
+                return { 
+                    success: true, 
+                    data: result.data, 
+                    date: actualDate,
+                    source: 'database',
+                    count: Object.keys(result.data).length,
+                    summaryDT: result.summaryDT,
+                    summarySIUAT: result.summarySIUAT
+                };
+            } else {
+                console.log('⚠️ Данные не найдены в БД (ни за запрошенную, ни за предыдущие даты)');
+                return { success: false, message: 'Данные не найдены в БД' };
+            }
+        } catch (error) {
+            console.warn('❌ Ошибка загрузки из БД:', error.message);
+            return { success: false, message: 'Ошибка подключения к серверу: ' + error.message };
+        }
+    }
+
+    // ✅ НОВЫЙ МЕТОД: Сохранение данных текущего дня в БД через API
+    async saveCurrentDayDataToAPI(data, date) {
+        try {
+            console.log(`💾 Сохранение данных за ${date} в БД...`);
+            
+            const payload = {
+                date: date || this.formatDate(this.currentDate),
+                data: data || this.currentSubdivisionData,
+                summaryDT: this.summaryDT,
+                summarySIUAT: this.summarySIUAT
+            };
+            
+            const response = await fetch('http://31.130.155.16:5000/api/previous-day-data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                console.log(`✅ Сохранено ${result.count || Object.keys(payload.data).length} филиалов в БД`);
+                
+                // Дублируем в localStorage для надёжности
+                localStorage.setItem('previousDayDebt_manual', JSON.stringify({
+                    data: payload.data,
+                    date: payload.date
+                }));
+                
+                return { 
+                    success: true, 
+                    count: result.count || Object.keys(payload.data).length,
+                    source: 'database'
+                };
+            } else {
+                console.warn('⚠️ Ошибка сохранения в БД:', result.error);
+                return { success: false, error: result.error };
+            }
+        } catch (error) {
+            console.warn('❌ Ошибка сохранения в БД, используем localStorage:', error.message);
+            
+            // Fallback: сохраняем только в localStorage
+            try {
+                localStorage.setItem('previousDayDebt_manual', JSON.stringify({
+                    data: data || this.currentSubdivisionData,
+                    date: date || this.formatDate(this.currentDate)
+                }));
+                console.log('✅ Данные сохранены в localStorage (БД недоступна)');
+                return { 
+                    success: true, 
+                    fallback: true, 
+                    message: 'Сохранено локально (БД недоступна)' 
+                };
+            } catch (e) {
+                console.error('❌ Ошибка сохранения даже в localStorage:', e);
+                return { success: false, error: 'Не удалось сохранить данные' };
+            }
+        }
+    }
+
     // Загрузка списка целевых контрагентов из localStorage
     loadTargetContractors() {
         const stored = localStorage.getItem('targetContractors');
@@ -115,17 +249,64 @@ class DebtReconciliationManager {
     }
 
     // Получить данные предыдущего дня из localStorage
-    // Возвращает { data: {}, date: '' }
+    // ИЗМЕНЕНИЕ: Добавлен fallback - если в localStorage данных нет, пробуем загрузить из БД
+    async getPreviousDayDataAsync() {
+        try {
+            // Сначала пробуем из localStorage
+            const raw = localStorage.getItem('previousDayDebt_manual');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object' && 'data' in parsed) {
+                    const data = parsed.data || {};
+                    if (Object.keys(data).length > 0) {
+                        console.log(`✅ Данные предыдущего дня загружены из localStorage за ${parsed.date || 'неизвестную дату'}`);
+                        
+                        // ✅ ИЗМЕНЕНИЕ: Если в localStorage есть сводные данные - загружаем их
+                        if (parsed.summaryDT) {
+                            this.summaryDT = parsed.summaryDT;
+                        }
+                        if (parsed.summarySIUAT) {
+                            this.summarySIUAT = parsed.summarySIUAT;
+                        }
+                        
+                        return { data: data, date: parsed.date || '' };
+                    }
+                }
+            }
+            
+            // Если в localStorage пусто или данных нет - пробуем загрузить из БД
+            console.log('⚠️ В localStorage данных нет, пробуем загрузить из БД...');
+            const yesterday = this.formatDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
+            const apiResult = await this.loadPreviousDayDataFromAPI(yesterday);
+            
+            if (apiResult.success) {
+                console.log(`✅ Данные загружены из БД за ${apiResult.date}`);
+                return { data: apiResult.data, date: apiResult.date };
+            }
+            
+            console.log('⚠️ Данные не найдены ни в localStorage, ни в БД');
+        } catch (e) {
+            console.error('Ошибка загрузки данных предыдущего дня:', e);
+        }
+        return { data: {}, date: '' };
+    }
+
+    // Синхронная версия для обратной совместимости
     getPreviousDayData() {
         try {
             const raw = localStorage.getItem('previousDayDebt_manual');
             if (raw) {
                 const parsed = JSON.parse(raw);
-                // Если сохранён в новом формате { data: {...}, date: 'YYYY-MM-DD' }
                 if (parsed && typeof parsed === 'object' && 'data' in parsed) {
+                    // ✅ ИЗМЕНЕНИЕ: Загружаем сводные данные из localStorage
+                    if (parsed.summaryDT) {
+                        this.summaryDT = parsed.summaryDT;
+                    }
+                    if (parsed.summarySIUAT) {
+                        this.summarySIUAT = parsed.summarySIUAT;
+                    }
                     return { data: parsed.data || {}, date: parsed.date || '' };
                 }
-                // Старый формат — просто объект данных
                 return { data: parsed, date: '' };
             }
         } catch (e) {
@@ -139,13 +320,37 @@ class DebtReconciliationManager {
         try {
             const payload = {
                 data: this.currentSubdivisionData,
-                date: this.formatDate(this.currentDate)
+                date: this.formatDate(this.currentDate),
+                // ✅ ИЗМЕНЕНИЕ: Сохраняем также сводные данные
+                summaryDT: this.summaryDT,
+                summarySIUAT: this.summarySIUAT
             };
+            // localStorage поддерживает UTF-8 нативно — не кодируем!
             localStorage.setItem('previousDayDebt_manual', JSON.stringify(payload));
             console.log('Данные текущего дня сохранены для использования завтра');
+            console.log('Сохранено подразделений:', Object.keys(this.currentSubdivisionData).length);
+            console.log('Дата сохранения:', payload.date);
         } catch (e) {
             console.error('Ошибка сохранения данных текущего дня:', e);
         }
+    }
+
+    // Принудительный сбор и сохранение данных (для кнопки "Сохранить данные дня")
+    forceCollectAndSave() {
+        console.log('=== ПРИНУДИТЕЛЬНЫЙ СБОР ДАННЫХ ДЛЯ СОХРАНЕНИЯ ===');
+        
+        // Собираем данные из строк филиалов (режим fromFilialRows = true)
+        this.collectSubdivisionData(true);
+        
+        if (Object.keys(this.currentSubdivisionData).length > 0) {
+            this.saveCurrentDayData();
+            const count = Object.keys(this.currentSubdivisionData).length;
+            console.log('✅ Данные сохранены успешно, подразделений:', count);
+            return { success: true, count: count };
+        }
+        
+        console.warn('⚠️ Нет данных для сохранения');
+        return { success: false, message: 'Нет данных для сохранения. Выполните сверку сначала.' };
     }
 
     // Собрать данные по филиалам из debtData (только из колонки OVERDUE)
@@ -316,12 +521,15 @@ class DebtReconciliationManager {
 
             // Полная замена: удаляем старые данные и записываем новые
             try {
-                // Сохраняем в новом формате { data: {...}, date: '' }
-                // Дату можно заполнить при сохранении через saveCurrentDayData
-                localStorage.setItem('previousDayDebt_manual', JSON.stringify({
+                const payload = {
                     data: previousDayData,
-                    date: ''
-                }));
+                    date: '',
+                    // ✅ ИЗМЕНЕНИЕ: Сохраняем текущие сводные данные
+                    summaryDT: this.summaryDT,
+                    summarySIUAT: this.summarySIUAT
+                };
+                // Не кодируем — localStorage поддерживает UTF-8
+                localStorage.setItem('previousDayDebt_manual', JSON.stringify(payload));
                 console.log(`Данные предыдущего дня полностью заменены: ${parsedCount} записей, общая сумма: ${totalAmount.toFixed(2)}`);
             } catch (e) {
                 console.error('Ошибка сохранения в localStorage:', e);
@@ -385,7 +593,8 @@ class DebtReconciliationManager {
         return false;
     }
 
-    // Сохранение данных сверки в PostgreSQL для дашборда
+    // ✅ ИЗМЕНЕНИЕ: Сохранение данных сверки в PostgreSQL для дашборда
+    // Теперь включает сводные данные (legal, notRecoverable, recoverable)
     async saveToDashboardDB(filialData) {
         try {
             const swipeDate = this.formatDate(this.currentDate);
@@ -442,20 +651,26 @@ class DebtReconciliationManager {
             totalDebt = Math.round(totalDebt * 100) / 100;
             totalOverdue = Math.round(totalOverdue * 100) / 100;
 
+            // ✅ ИЗМЕНЕНИЕ: Добавляем сводные данные в payload
             const payload = {
                 swipeDate: swipeDate,
                 filialData: filialData,
                 counterpartyData: cpFormatted,
                 totalDebt: totalDebt,
-                totalOverdue: totalOverdue
+                totalOverdue: totalOverdue,
+                // ✅ НОВОЕ: сводные данные для сохранения в БД
+                summaryDT: this.summaryDT,
+                summarySIUAT: this.summarySIUAT
             };
 
-            console.log('📊 Отправка данных в БД для дашборда...');
+            console.log('📤 Отправка данных в БД для дашборда...');
             console.log('  Дата:', swipeDate);
             console.log('  Филиалов:', Object.keys(filialData).length);
             console.log('  Контрагентов:', Object.keys(cpFormatted).length);
             console.log('  Общая ДЗ:', totalDebt);
             console.log('  Общая ПДЗ:', totalOverdue);
+            console.log('  Сводные ДТ:', this.summaryDT);
+            console.log('  Сводные СИ УАТ:', this.summarySIUAT);
 
             const resp = await fetch('http://31.130.155.16:5000/api/save-swipe-data', {
                 method: 'POST',
@@ -485,10 +700,6 @@ class DebtReconciliationManager {
         return year + '-' + month + '-' + day;
     }
 
-    getTodayString() {
-        return this.formatDate(this.currentDate);
-    }
-
     clearData() {
         this.debtData = [];
         this.debtHeaders = [];
@@ -510,6 +721,12 @@ class DebtReconciliationManager {
     async loadDebtRegistryFile(file) {
         console.log('Загрузка файла реестра ДЗ:', file.name);
         try {
+            // ВАЖНО: Полная очистка перед загрузкой новых данных
+            this.debtData = [];
+            this.debtHeaders = [];
+            this.currentSubdivisionData = {};
+            this.processedDocuments = [];
+
             const arrayBuffer = await this.readFileAsArrayBuffer(file);
 
             const workbook = XLSX.read(arrayBuffer, {
@@ -530,10 +747,6 @@ class DebtReconciliationManager {
             this.debtHeaders = this.debtData[0] || [];
             this.debtFile = file;
             this.debtFileName = file.name;
-
-            // Сбрасываем данные предыдущей сессии, чтобы не использовать старые значения
-            this.currentSubdivisionData = {};
-            this.processedDocuments = [];
 
             console.log('Файл загружен, строк:', this.debtData.length);
 
@@ -784,6 +997,11 @@ class DebtReconciliationManager {
 
     reconcile() {
         console.log('Начало сверки...');
+        
+        // ВАЖНО: Очистка данных перед новой сверкой, чтобы избежать дублирования
+        this.currentSubdivisionData = {};
+        this.processedDocuments = [];
+        
         this.stats = {
             totalDocuments: 0,
             foundDocuments: 0,
@@ -856,7 +1074,7 @@ class DebtReconciliationManager {
                     hasDate = true;
                     console.log(`  Найден в файле поступлений с датой: ${this.formatDate(expectedDate)}`);
                 } else {
-                    console.log(`  Не найден в файле поступлений - документ останется без изменений`);
+                    console.log(`  Не найден в файле поступлений - документ будет считаться НЕ ПРОСРОЧЕННЫМ`);
                 }
 
                 this.stats.foundDocuments++;
@@ -864,14 +1082,15 @@ class DebtReconciliationManager {
                 const debtAmount = this.parseExcelNumber(row[this.COLUMNS.DEBT_AMOUNT] || 0);
                 console.log(`  Сумма долга: ${debtAmount}`);
 
-                // ОБНОВЛЯЕМ ТОЛЬКО ЕСЛИ ЕСТЬ ДАТА В ФАЙЛЕ ПОСТУПЛЕНИЙ
-                if (debtAmount > 0 && hasDate) {
+                // ✅ ИЗМЕНЕНИЕ: Обновляем ВСЕГДА для целевых контрагентов
+                // Если даты нет — документ считается НЕ ПРОСРОЧЕННЫМ
+                if (debtAmount > 0) {
                     const updated = this.updateDocumentRow(i, debtAmount, expectedDate, today, hasDate);
                     if (updated) {
                         this.stats.updatedDocuments++;
                         this.processedDocuments.push({
                             documentName: docName,
-                            action: 'Выполнено',
+                            action: hasDate ? 'Выполнено' : 'Нет даты - не просрочено',
                             date: expectedDate ? this.formatDate(expectedDate) : null,
                             amount: debtAmount,
                             rowIndex: i,
@@ -880,7 +1099,7 @@ class DebtReconciliationManager {
                         console.log(`  Документ добавлен в processedDocuments`);
                     }
                 } else {
-                    console.log(`  Документ пропущен (нет даты в файле поступлений)`);
+                    console.log(`  Документ пропущен (сумма долга = 0)`);
                 }
             }
         }
@@ -889,7 +1108,8 @@ class DebtReconciliationManager {
         console.log('processedDocuments содержит', this.processedDocuments.length, 'записей');
 
         // ВАЖНО: Принудительно пересобираем данные по филиалам из ОБНОВЛЕННОГО debtData
-        this.collectSubdivisionData();
+        // Используем режим fromFilialRows = true для получения данных из строк филиалов
+        this.collectSubdivisionData(true);
 
         return {
             success: true,
@@ -925,9 +1145,9 @@ class DebtReconciliationManager {
             }
         }
 
-        // Если даты нет - документ непросроченный
+        // ✅ ИЗМЕНЕНИЕ: Если даты нет - документ считается НЕ ПРОСРОЧЕННЫМ
         if (!hasDate || expectedDate === null || expectedDate >= today) {
-            console.log(`  -> НЕ ПРОСРОЧЕНО (причина: ${!hasDate ? 'нет даты' : 'дата в будущем'})`);
+            console.log(`  -> НЕ ПРОСРОЧЕНО (причина: ${!hasDate ? 'нет даты в файле поступлений' : 'дата в будущем'})`);
 
             // O (просрочено) - очищаем
             if (row[this.COLUMNS.OVERDUE] !== 0) {
@@ -1005,7 +1225,7 @@ class DebtReconciliationManager {
         // ВАЖНО: Принудительно пересобираем данные по филиалам из ТЕКУЩЕГО debtData
         // Это гарантирует, что currentSubdivisionData будет содержать актуальные данные из файла
         console.log('ПРИНУДИТЕЛЬНЫЙ ПЕРЕСБОР данных по филиалам из debtData...');
-        this.collectSubdivisionData();
+        this.collectSubdivisionData(true);
 
         // Проверяем, что данные собраны
         if (Object.keys(this.currentSubdivisionData).length === 0) {
@@ -1016,7 +1236,7 @@ class DebtReconciliationManager {
         console.log('=== ДАННЫЕ ДЛЯ ОТПРАВКИ НА СЕРВЕР ===');
         console.log('currentDayData (из debtData, колонка O):', JSON.stringify(this.currentSubdivisionData));
 
-        // Получаем данные предыдущего дня из localStorage
+        // Получаем данные предыдущего дня из localStorage (синхронно для формирования отчёта)
         const previousDayInfo = this.getPreviousDayData();
         console.log('previousDayData (из localStorage):', JSON.stringify(previousDayInfo.data));
 
@@ -1038,7 +1258,9 @@ class DebtReconciliationManager {
             const formData = new FormData();
             formData.append('file', this.debtFile);
 
-            // Формируем объект данных для сводных таблиц
+            // ✅ ИЗМЕНЕНИЕ: Инвертированная логика динамики
+            // Уменьшение задолженности = положительное число (зеленый)
+            // Увеличение задолженности = отрицательное число (красный)
             const summaryData = {
                 updatedDocuments: this.processedDocuments,
                 // Данные для таблицы динамики
@@ -1101,21 +1323,20 @@ class DebtReconciliationManager {
             console.log('Получен ответ, размер:', blob.size, 'байт');
 
             // === ЧИТАЕМ ДАННЫЕ ФИЛИАЛОВ ИЗ ЗАГОЛОВКА ОТВЕТА СЕРВЕРА ===
-            // Сервер возвращает точные данные после recalc_totals() в заголовке X-Filial-Data.
-            // Клиент НЕ должен использовать собственные расчёты, потому что:
-            // - Клиент суммирует ВСЕ документы (включая промежуточные строки: контрагенты, договоры)
-            // - Сервер суммирует ТОЛЬКО листья дерева (через recalc_totals)
-            // - Это даёт разницу в суммах, особенно для филиалов с вложенной структурой
+            // ИСПРАВЛЕНИЕ: Декодирование из Base64
             const filialDataHeader = serverResponse.headers.get('X-Filial-Data');
             let serverFilialData = null;
             let serverDataAvailable = false;
 
             if (filialDataHeader) {
                 try {
-                    // Декодируем base64
-                    const jsonStr = atob(filialDataHeader);
+                    // Декодируем из Base64 в строку UTF-8, затем парсим JSON
+                    // FIX: atob() возвращает Latin-1, поэтому конвертируем байты через TextDecoder
+                    const binary = atob(filialDataHeader);
+                    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+                    const jsonStr = new TextDecoder('utf-8').decode(bytes);
                     serverFilialData = JSON.parse(jsonStr);
-                    console.log('=== ДАННЫЕ ФИЛИАЛОВ С СЕРВЕРА (из заголовка X-Filial-Data) ===');
+                    console.log('=== ДАННЫЕ ФИЛИАЛОВ С СЕРВЕРА (из заголовка X-Filial-Data, Base64) ===');
                     console.log('serverFilialData:', JSON.stringify(serverFilialData));
 
                     if (serverFilialData && Object.keys(serverFilialData).length > 0) {
@@ -1129,7 +1350,6 @@ class DebtReconciliationManager {
                 }
             } else {
                 console.warn('⚠️ Заголовок X-Filial-Data не найден в ответе сервера');
-                console.warn('   Возможная причина: CORS не настроен на expose_headers для X-Filial-Data');
             }
 
             // ВАЖНО: используем ТОЛЬКО серверные данные для сохранения в localStorage
@@ -1141,7 +1361,8 @@ class DebtReconciliationManager {
                 console.error('   И что сервер запущен с обновлённым кодом.');
             }
 
-            const dataToSave = serverDataAvailable ? serverFilialData : null;
+            // ИЗМЕНЕНИЕ: Fallback на локальные данные если серверные недоступны
+            const dataToSave = serverDataAvailable ? serverFilialData : this.currentSubdivisionData;
 
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -1157,10 +1378,10 @@ class DebtReconciliationManager {
             // === АВТОМАТИЧЕСКОЕ СОХРАНЕНИЕ ДАННЫХ В LOCALSTORAGE ===
             console.log('=== АВТОСОХРАНЕНИЕ ДАННЫХ В LOCALSTORAGE ===');
 
-            if (dataToSave) {
-                // Сохраняем ТОЛЬКО серверные данные
+            if (dataToSave && Object.keys(dataToSave).length > 0) {
+                // Сохраняем данные (серверные или локальные) с ТЕКУЩЕЙ датой
                 this.currentSubdivisionData = dataToSave;
-                console.log('currentSubdivisionData для сохранения (серверные):', JSON.stringify(this.currentSubdivisionData));
+                console.log('currentSubdivisionData для сохранения:', JSON.stringify(this.currentSubdivisionData));
 
                 this.saveCurrentDayData();
                 console.log('✅ Данные текущего дня сохранены в localStorage для использования завтра');
@@ -1178,13 +1399,13 @@ class DebtReconciliationManager {
                     message: 'Файл сохранен. Данные сохранены автоматически.'
                 };
             } else {
-                // Серверные данные недоступны — не сохраняем ничего
-                console.warn('⚠️ Данные НЕ сохранены в localStorage (серверные данные недоступны)');
-                console.warn('   Для сохранения используйте "Настройки сводных" → "Сохранить" после загрузки файла с данными');
+                // Данные недоступны — не сохраняем ничего
+                console.warn('⚠️ Данные НЕ сохранены в localStorage (данные недоступны)');
+                console.warn('   Для сохранения используйте кнопку "Сохранить данные дня" после сверки');
 
                 return {
                     success: true,
-                    message: 'Файл сохранен. ВНИМАНИЕ: данные для сводной таблицы НЕ сохранены автоматически. Проверьте настройки CORS.'
+                    message: 'Файл сохранен. ВНИМАНИЕ: данные для сводной таблицы НЕ сохранены автоматически.'
                 };
             }
 

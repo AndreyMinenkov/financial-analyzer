@@ -1,24 +1,25 @@
 // parser.js - Парсер банковских выписок
+// Конфигурация загружается из storage (БД), без хардкода в нормализации имён
 class BankStatementParser {
     constructor() {
-        // Загружаем маппинг из localStorage или используем стандартный
+        // Вся конфигурация загружается с сервера/API через storage
         this.accountMapping = this.loadAccountMapping();
+        this.companyPatterns = [];   // [{pattern, canonical, match_type}] из БД
+        this._ready = false;
+    }
 
-        this.companyPatterns = [
-            /ООО\s*["']?СЕРВИС-ИНТЕГРАТОР["']?/i,
-            /СИ УАТ/i,
-            /СЕРВИС ЦМ/i,
-            /СЕРВИС-ИНТЕГРАТОР УТ/i,
-            /СЕРВИС-ИНТЕГРАТОР САХАЛИН/i,
-            /СЕРВИС-ИНТЕГРАТОР ЛОГИСТИКА/i,
-            /СОИР/i,
-            /УПРАВЛЯЮЩАЯ КОМПАНИЯ СЕРВИС-ИНТЕГРАТОР/i,
-            /СЕРВИС-ИНТЕГРАТОР АО/i
-        ];
+    async init(storage) {
+        // Берём конфигурацию из storage (уже загружена с сервера)
+        const allAccounts = storage.getAccounts();
+        this.companyPatterns = storage.getCompanyAliases();
+        this.storage = storage;
+        this._ready = true;
+        console.log('✅ BankStatementParser: конфигурация загружена из storage');
+        console.log(`   companyAliases: ${this.companyPatterns.length}, accounts: ${Object.keys(allAccounts).length}`);
     }
 
     loadAccountMapping() {
-        console.log("Загрузка маппинга из localStorage");
+        console.log("Загрузка маппинга счетов из localStorage");
         const stored = localStorage.getItem('accountMapping');
         if (stored) {
             try {
@@ -27,7 +28,7 @@ class BankStatementParser {
                 console.error('Ошибка загрузки маппинга из localStorage', e);
             }
         }
-        // Стандартный маппинг (полный список)
+        // Стандартный маппинг (полный список) — fallback если ни localStorage, ни сервер не доступны
         return {
             "40702810900000004317": { company: "Сервис-Интегратор ООО", bank: "ВБРР" },
             "40702810300000011971": { company: "Сервис-Интегратор ООО", bank: "МКБ" },
@@ -50,6 +51,7 @@ class BankStatementParser {
             "40702810777700083889": { company: "Сервис-Интегратор ООО", bank: "Дело" },
             "40702810800000084832": { company: "Сервис-Интегратор ООО", bank: "ГПБ" },
             "40702810000000147197": { company: "Сервис-Интегратор ООО", bank: "ГПБ" },
+            "40702810600000009460": { company: "Сервис-Интегратор ООО", bank: "РЕАЛИСТ" },
             "40702810400000199295": { company: "СИ УАТ ООО", bank: "ГПБ" },
             "40702810805010002132": { company: "СИ УАТ ООО", bank: "МКБ" },
             "40702810612010694918": { company: "СИ УАТ ООО", bank: "Совкомбанк" },
@@ -113,13 +115,11 @@ class BankStatementParser {
                     transactions: parsed.transactions
                 });
 
-                // Добавляем транзакции
                 allTransactions.push(...parsed.transactions.map(t => ({
                     ...t,
                     sourceFile: file.name
                 })));
 
-                // Обновляем информацию о счетах
                 if (parsed.account) {
                     accounts[parsed.account] = {
                         company: parsed.company,
@@ -167,23 +167,9 @@ class BankStatementParser {
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
 
-            // Определение банка по содержимому
+            // Определение банка
             if (!bank) {
-                if (line.includes('ПСБ') || line.includes('PSBCorporate')) bank = 'ПСБ';
-                else if (line.includes('Сбер') || line.includes('СберКазначейство')) bank = 'Сбер';
-                else if (line.includes('СДМ') || line.includes('ИНН 7729395092')) bank = 'СДМ';
-                else if (line.includes('МКБ') || line.includes('МОСКОВСКИЙ КРЕДИТНЫЙ БАНК')) bank = 'МКБ';
-                else if (line.includes('ВТБ')) bank = 'ВТБ';
-                else if (line.includes('ГПБ')) bank = 'ГПБ';
-                else if (line.includes('БКС')) bank = 'БКС';
-                else if (line.includes('Синара')) bank = 'Синара';
-                else if (line.includes('СОВКОМБАНК')) bank = 'Совкомбанк';
-                else if (line.includes('АВЕРС')) bank = 'Аверс';
-                else if (line.includes('АЛЬФА')) bank = 'Альфа';
-                else if (line.includes('ВБРР')) bank = 'ВБРР';
-                else if (line.includes('МИБ')) bank = 'МИБ';
-                else if (line.includes('ДЕЛО')) bank = 'Дело';
-                else if (line.includes('ИНГОССТРАХ')) bank = 'Ингосстрах';
+                bank = this.detectBank(line);
             }
 
             // Секция счета
@@ -196,20 +182,17 @@ class BankStatementParser {
                 if (line.startsWith('РасчСчет=')) {
                     account = line.split('=')[1]?.trim();
                     company = this.getCompanyByAccount(account);
-                    // Получаем банк из маппинга, если он там есть
                     const mappedBank = this.getBankByAccount(account);
                     if (mappedBank) {
                         bank = mappedBank;
                     }
                 } else if (line.startsWith('ДатаКонца=')) {
-                    // Берем дату конца периода как дату выписки - это самая свежая дата
                     date = line.split('=')[1]?.trim();
                 } else if (line.startsWith('КонечныйОстаток=')) {
                     balance = parseFloat(line.split('=')[1]?.replace(',', '.') || 0);
                 } else if (line === 'КонецРасчСчет') {
                     inAccountSection = false;
                 }
-                // Также проверяем ДатаНачала= на случай, если ДатаКонца= отсутствует
                 if (line.startsWith('ДатаНачала=') && !date) {
                     date = line.split('=')[1]?.trim();
                 }
@@ -230,7 +213,7 @@ class BankStatementParser {
                     recipientAccount: '',
                     recipientBank: '',
                     purpose: '',
-                    direction: '' // 'incoming' или 'outgoing'
+                    direction: ''
                 };
                 continue;
             }
@@ -238,19 +221,16 @@ class BankStatementParser {
             if (line === 'КонецДокумента' && currentTransaction) {
                 inDocumentSection = false;
 
-                // Определяем направление платежа
                 if (!currentTransaction.direction) {
                     this.determineTransactionDirection(currentTransaction, account);
                 }
 
-                // Обрабатываем транзакцию
                 this.processTransaction(currentTransaction, account, company);
                 transactions.push(currentTransaction);
                 currentTransaction = null;
                 continue;
             }
 
-            // Парсинг полей документа
             if (inDocumentSection && currentTransaction) {
                 this.parseDocumentLine(line, currentTransaction);
             }
@@ -262,7 +242,6 @@ class BankStatementParser {
             if (accountMatch) {
                 account = accountMatch[0];
                 company = this.getCompanyByAccount(account);
-                // Получаем банк из маппинга для счета из имени файла
                 const mappedBank = this.getBankByAccount(account);
                 if (mappedBank) {
                     bank = mappedBank;
@@ -272,20 +251,7 @@ class BankStatementParser {
 
         // Если банк не определен, пробуем из имени файла
         if (!bank) {
-            if (filename.includes('ПСБ') || filename.includes('PSB')) bank = 'ПСБ';
-            else if (filename.includes('Сбер') || filename.includes('SBER')) bank = 'Сбер';
-            else if (filename.includes('СДМ') || filename.includes('SDM')) bank = 'СДМ';
-            else if (filename.includes('МКБ') || filename.includes('MKB')) bank = 'МКБ';
-            else if (filename.includes('ВТБ') || filename.includes('VTB')) bank = 'ВТБ';
-            else if (filename.includes('ГПБ') || filename.includes('GPB')) bank = 'ГПБ';
-            else if (filename.includes('БКС') || filename.includes('BCS')) bank = 'БКС';
-            else if (filename.includes('Синара')) bank = 'Синара';
-            else if (filename.includes('Совкомбанк')) bank = 'Совкомбанк';
-            else if (filename.includes('Аверс')) bank = 'Аверс';
-            else if (filename.includes('Альфа')) bank = 'Альфа';
-            else if (filename.includes('ВБРР')) bank = 'ВБРР';
-            else if (filename.includes('МИБ')) bank = 'МИБ';
-            else if (filename.includes('Дело')) bank = 'Дело';
+            bank = this.detectBankFromFilename(filename);
         }
 
         // Если банк все еще не определен, пробуем получить из маппинга
@@ -365,79 +331,48 @@ class BankStatementParser {
 
     cleanCompanyName(name) {
         if (!name) return '';
-
-        // Удаление ИНН из начала
-        if (name.startsWith('ИНН ')) {
-            name = name.replace(/^ИНН\s+\d+\s+/, '');
-        }
-
-        // Удаление лишних кавычек
+        name = name.replace(/^ИНН\s+\d+\s+/, '');
         name = name.replace(/^["']+|["']+$/g, '');
-
         return name.trim();
     }
 
     determineTransactionDirection(transaction, account) {
-        console.log("Определяем направление для транзакции:", transaction);
-        console.log("Счет из выписки:", account);
-        // Если получатель - наша компания, это входящий платеж
         if (transaction.recipientAccount === account ||
             this.isOurCompany(transaction.recipient)) {
             transaction.direction = 'incoming';
-        }
-        // Если плательщик - наша компания, это исходящий платеж
-        else if (transaction.payerAccount === account ||
-                 this.isOurCompany(transaction.payer)) {
+        } else if (transaction.payerAccount === account ||
+                   this.isOurCompany(transaction.payer)) {
             transaction.direction = 'outgoing';
-        }
-        // Эвристика: если счет получателя есть в нашей базе
-        else if (transaction.recipientAccount &&
-                 this.accountMapping[transaction.recipientAccount]) {
+        } else if (transaction.recipientAccount &&
+                   this.accountMapping[transaction.recipientAccount]) {
             transaction.direction = 'incoming';
-        }
-        // Эвристика: если счет плательщика есть в нашей базе
-        else if (transaction.payerAccount &&
-                 this.accountMapping[transaction.payerAccount]) {
+        } else if (transaction.payerAccount &&
+                   this.accountMapping[transaction.payerAccount]) {
             transaction.direction = 'outgoing';
         }
     }
 
     processTransaction(transaction, account, company) {
-        // Определяем нашу компанию и контрагента
         if (transaction.direction === "incoming") {
-            // Используем переданные account и company (из маппинга или секции счета)
             transaction.ourAccount = account || transaction.recipientAccount;
             transaction.ourCompany = company;
-
-            // Если компания не определена через маппинг, пытаемся определить из получателя
             if (!transaction.ourCompany && transaction.recipient) {
                 transaction.ourCompany = this.normalizeCompanyName(transaction.recipient);
             }
-
-            // Банк получателя (наш банк)
             transaction.ourBank = this.normalizeBankName(transaction.recipientBank);
-
-            // Контрагент (плательщик)
             transaction.counterCompany = transaction.payer;
             transaction.counterAccount = transaction.payerAccount;
         } else if (transaction.direction === "outgoing") {
             transaction.ourAccount = account || transaction.payerAccount;
             transaction.ourCompany = company;
-
-            // Если компания не определена через маппинг, пытаемся определить из плательщика
             if (!transaction.ourCompany && transaction.payer) {
                 transaction.ourCompany = this.normalizeCompanyName(transaction.payer);
             }
-
-            // Банк отправителя (наш банк)
             transaction.ourBank = this.normalizeBankName(transaction.payerBank);
-
-            // Контрагент (получатель)
             transaction.counterCompany = transaction.recipient;
             transaction.counterAccount = transaction.recipientAccount;
         }
 
-        // Нормализуем названия компаний
         if (transaction.ourCompany) {
             transaction.ourCompany = this.normalizeCompanyName(transaction.ourCompany);
         }
@@ -446,8 +381,49 @@ class BankStatementParser {
         }
     }
 
+    // ── Нормализация имён компаний через company_aliases из БД ──
+    normalizeCompanyName(name) {
+        if (!name) return name;
+
+        // Проверяем синонимы из БД (company_aliases)
+        for (const alias of this.companyPatterns) {
+            let matches = false;
+            if (alias.match_type === 'exact') {
+                matches = name.toUpperCase() === alias.pattern.toUpperCase();
+            } else if (alias.match_type === 'regex') {
+                try { matches = new RegExp(alias.pattern, 'i').test(name); } catch(e) {}
+            } else {
+                // 'contains' (по умолчанию)
+                matches = name.toUpperCase().includes(alias.pattern.toUpperCase());
+            }
+            if (matches) return alias.canonical;
+        }
+        return name;
+    }
+
+    isOurCompany(companyName) {
+        if (!companyName) return false;
+        for (const alias of this.companyPatterns) {
+            let matches = false;
+            const upper = companyName.toUpperCase();
+            if (alias.match_type === 'exact') {
+                matches = upper === alias.pattern.toUpperCase();
+            } else if (alias.match_type === 'regex') {
+                try { matches = new RegExp(alias.pattern, 'i').test(companyName); } catch(e) {}
+            } else {
+                matches = upper.includes(alias.pattern.toUpperCase());
+            }
+            if (matches) return true;
+        }
+        // Если синонимов нет — проверяем по маппингу счетов
+        const upperName = companyName.toUpperCase();
+        for (const [account, info] of Object.entries(this.accountMapping)) {
+            if (info.company && info.company.toUpperCase().includes(upperName)) return true;
+        }
+        return false;
+    }
+
     getCompanyByAccount(account) {
-        console.log("getCompanyByAccount:", account);
         if (!account) return '';
         const cleanAccount = account.replace(/\s/g, '');
         return this.accountMapping[cleanAccount]?.company || '';
@@ -459,63 +435,56 @@ class BankStatementParser {
         return this.accountMapping[cleanAccount]?.bank || '';
     }
 
-    isOurCompany(companyName) {
-        if (!companyName) return false;
-
-        for (const pattern of this.companyPatterns) {
-            if (pattern.test(companyName)) {
-                return true;
-            }
+    // ── Определение банка ──────────────────────────────────
+    detectBank(line) {
+        const upper = line.toUpperCase();
+        const banks = [
+            ['ПСБ', /ПСБ|PSBCORPORATE/],
+            ['Сбер', /СБЕР|СБЕРКАЗНАЧЕЙСТВО/],
+            ['СДМ', /СДМ|ИНН\s*7729395092/],
+            ['МКБ', /МКБ|МОСКОВСКИЙ КРЕДИТНЫЙ БАНК/],
+            ['ВТБ', /ВТБ/],
+            ['ГПБ', /ГПБ/],
+            ['БКС', /БКС/],
+            ['Синара', /СИНАРА/],
+            ['Совкомбанк', /СОВКОМБАНК/],
+            ['Аверс', /АВЕРС/],
+            ['Альфа', /АЛЬФА/],
+            ['ВБРР', /ВБРР/],
+            ['МИБ', /МИБ/],
+            ['Дело', /ДЕЛО/],
+            ['Ингосстрах', /ИНГОССТРАХ/]
+        ];
+        for (const [name, pattern] of banks) {
+            if (pattern.test(upper)) return name;
         }
-
-        return false;
+        return '';
     }
 
-    normalizeCompanyName(name) {
-        if (!name) return name;
-
-        // Приводим к верхнему регистру для унификации сравнения
-        const upperName = name.toUpperCase();
-
-        // Проверяем по шаблонам компаний
-        if (/СИ УАТ|СИУАТ/.test(upperName)) return "СИ УАТ ООО";
-        if (/СЕРВИС ЦМ|СЕРВИСЦМ/.test(upperName)) return "Сервис ЦМ ООО";
-        if (/УПРАВЛЯЮЩАЯ КОМПАНИЯ/.test(upperName)) return "Управляющая компания Сервис-Интегратор ООО";
-        if (/СОИР/.test(upperName)) return "СОИР ООО";
-        if (/СЕРВИСНОЕ ОБСЛУЖИВАНИЕ И РЕМОНТ/.test(upperName)) return "СОИР ООО";
-        if (/СЕРВИС-ИНТЕГРАТОР УТ/.test(upperName)) return "Сервис-Интегратор УТ ООО";
-        if (/СЕРВИС-ИНТЕГРАТОР САХАЛИН/.test(upperName)) return "Сервис-Интегратор Сахалин ООО";
-        if (/СЕРВИС-ИНТЕГРАТОР ЛОГИСТИКА/.test(upperName)) return "Сервис-Интегратор Логистика ООО";
-        if (/СЕРВИС-ИНТЕГРАТОР АО/.test(upperName)) return "Сервис-Интегратор АО";
-        if (/СЕРВИС-ИНТЕграТОР АРКТИКА/.test(upperName)) return "Сервис-Интегратор Арктика";
-        if (/СЕРВИС-ИНТЕГРАТОР/.test(upperName)) return "Сервис-Интегратор ООО";
-
-        return name;
+    detectBankFromFilename(filename) {
+        const upper = filename.toUpperCase();
+        const map = { 'ПСБ': 'ПСБ', 'PSB': 'ПСБ', 'СБЕР': 'Сбер', 'SBER': 'Сбер',
+            'СДМ': 'СДМ', 'SDM': 'СДМ', 'МКБ': 'МКБ', 'MKB': 'МКБ',
+            'ВТБ': 'ВТБ', 'VTB': 'ВТБ', 'ГПБ': 'ГПБ', 'GPB': 'ГПБ',
+            'БКС': 'БКС', 'BCS': 'БКС', 'СИНАРА': 'Синара', 'СОВКОМБАНК': 'Совкомбанк',
+            'АВЕРС': 'Аверс', 'АЛЬФА': 'Альфа', 'ВБРР': 'ВБРР', 'МИБ': 'МИБ', 'ДЕЛО': 'Дело' };
+        for (const [key, val] of Object.entries(map)) {
+            if (upper.includes(key)) return val;
+        }
+        return '';
     }
 
     normalizeBankName(bankName) {
-        if (!bankName) return bankName;
-
-        const upperName = bankName.toUpperCase();
-
-        // Маппинг вариантов на стандартные названия
-        if (/АВЕРС/.test(upperName)) return "Аверс";
-        if (/АЛЬФА-БАНК|АЛЬФА/.test(upperName)) return "Альфа";
-        if (/БКС/.test(upperName)) return "БКС Банк";
-        if (/ВБРР/.test(upperName)) return "ВБРР";
-        if (/ВТБ/.test(upperName)) return "ВТБ";
-        if (/ГПБ/.test(upperName)) return "ГПБ";
-        if (/ДЕЛО/.test(upperName)) return "Дело";
-        if (/ИНГОССТРАХ/.test(upperName)) return "Ингосстрах";
-        if (/МЕТАЛЛИНВЕСТБАНК/.test(upperName)) return "Металлинвестбанк";
-        if (/МОСКОВСКИЙ КРЕДИТНЫЙ БАНК|МКБ/.test(upperName)) return "МОСКОВСКИЙ КРЕДИТНЫЙ БАНК";
-        if (/МИБ/.test(upperName)) return "МИБ";
-        if (/ПСБ/.test(upperName)) return "ПСБ";
-        if (/СБЕРБАНК|СБЕР/.test(upperName)) return "Сбербанк";
-        if (/СДМ/.test(upperName)) return "СДМ-БАНК";
-        if (/СИНАРА/.test(upperName)) return "Синара";
-        if (/СОВКОМБАНК/.test(upperName)) return "Совкомбанк";
-
+        if (!bankName) return '';
+        const upper = bankName.toUpperCase();
+        const map = { 'АВЕРС': 'Аверс', 'АЛЬФА-БАНК': 'Альфа', 'АЛЬФА': 'Альфа',
+            'БКС': 'БКС Банк', 'ВБРР': 'ВБРР', 'ВТБ': 'ВТБ', 'ГПБ': 'ГПБ',
+            'ДЕЛО': 'Дело', 'ИНГОССТРАХ': 'Ингосстрах', 'МКБ': 'МОСКОВСКИЙ КРЕДИТНЫЙ БАНК',
+            'МИБ': 'МИБ', 'ПСБ': 'ПСБ', 'СБЕРБАНК': 'Сбербанк', 'СБЕР': 'Сбербанк',
+            'СДМ': 'СДМ-БАНК', 'СИНАРА': 'Синара', 'СОВКОМБАНК': 'Совкомбанк' };
+        for (const [k, v] of Object.entries(map)) {
+            if (upper.includes(k)) return v;
+        }
         return bankName;
     }
 
@@ -524,5 +493,96 @@ class BankStatementParser {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2
         }).format(num);
+    }
+
+    // ===== УПРАВЛЕНИЕ МАППИНГОМ СЧЕТОВ (СЕРВЕР + LOCALSTORAGE) =====
+
+    async loadMappingFromServer() {
+        try {
+            console.log('🔄 Загрузка маппинга счетов с сервера...');
+            const response = await fetch('/api/account-mapping', {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (!response.ok) {
+                console.warn('⚠️ Сервер недоступен, используем локальный маппинг');
+                return this.accountMapping;
+            }
+
+            const result = await response.json();
+            if (!result.success || !result.data) {
+                console.warn('⚠️ Сервер вернул пустой маппинг');
+                return this.accountMapping;
+            }
+
+            const serverMapping = {};
+            for (const item of result.data) {
+                if (item.is_active && item.account_number) {
+                    serverMapping[item.account_number] = {
+                        company: item.company_name,
+                        bank: item.bank_name || ''
+                    };
+                }
+            }
+
+            const mergedMapping = { ...this.accountMapping, ...serverMapping };
+            this.accountMapping = mergedMapping;
+            this.saveAccountMapping(mergedMapping);
+            this._serverMappingLoaded = true;
+
+            console.log(`✅ Загружено ${Object.keys(serverMapping).length} записей с сервера, всего: ${Object.keys(mergedMapping).length}`);
+            return mergedMapping;
+
+        } catch (error) {
+            console.warn('⚠️ Ошибка загрузки с сервера:', error.message);
+            return this.accountMapping;
+        }
+    }
+
+    async syncMappingToServer() {
+        try {
+            console.log('🔄 Синхронизация маппинга на сервер...');
+
+            const mappingList = [];
+            for (const [accountNumber, info] of Object.entries(this.accountMapping)) {
+                mappingList.push({
+                    account_number: accountNumber,
+                    company_name: info.company || '',
+                    bank_name: info.bank || ''
+                });
+            }
+
+            const response = await fetch('/api/account-mapping/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mapping: mappingList })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const result = await response.json();
+            console.log(`✅ Синхронизация: добавлено ${result.added}, обновлено ${result.updated}`);
+            return result;
+
+        } catch (error) {
+            console.warn('⚠️ Ошибка синхронизации с сервером:', error.message);
+            return { success: false, error: error.message };
+        }
+    }
+
+    getMappingForUI() {
+        const result = [];
+        for (const [accountNumber, info] of Object.entries(this.accountMapping)) {
+            result.push({
+                account_number: accountNumber,
+                company_name: info.company || '',
+                bank_name: info.bank || ''
+            });
+        }
+        result.sort((a, b) => a.company_name.localeCompare(b.company_name) || a.account_number.localeCompare(b.account_number));
+        return result;
     }
 }

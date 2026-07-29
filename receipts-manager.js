@@ -1,4 +1,5 @@
 // receipts-manager.js - Управление страницей поступлений
+// Все правила загружаются из storage (БД), без хардкода
 class ReceiptsManager {
     constructor(storage) {
         this.storage = storage;
@@ -20,66 +21,23 @@ class ReceiptsManager {
         let transactions = this.storage.getIncomingTransactions();
         console.log('Всего входящих транзакций:', transactions.length);
 
-        // Исключаем транзакции по назначению платежа
-        const excludePurposePhrases = [
-            'перечисление собственных средств',
-            'перечисление собственных дс под операционные расходы',
-            'сс перечисление собственных средств',
-            'перечисление средств на выплату заработной платы'
-        ];
-
-        // Исключаем транзакции по заказчику (наши компании)
-        const excludeCustomerNames = [
-            'сервис-интегратор ооо',
-            'си уат ооо',
-            'сервис-интегратор логистика ооо',
-            'соир ооо',
-            'сервис цм ооо',
-            'управляющая компания сервис-интегратор ооо',
-            'сервис-интегратор арктика ооо',
-            'сервис-интегратор ао',
-            'сервис-интегратор ут ооо',
-            'сервис-интегратор сахалин ооо',
-            'си логистика ооо',
-            'сервис-интератор красноярск',
-            // Производные названия
-            'ооо соир',
-            'сервис обслуживания и ремонта',
-            'ооо си уат',
-            'сервис-интегратор управление автотранспортом',
-            'ооо си логистика',
-            'ооо сервис-интегратор',
-            'ооо сервис цм',
-            'ооо управляющая компания сервис-интегратор',
-            'ооо сервис-интегратор арктика',
-            'ао сервис-интегратор',
-            'ооо сервис-интегратор ут',
-            'ооо сервис-интегратор сахалин'
-        ];
-
-        // Применяем фильтры исключения
-        transactions = transactions.filter(t => {
-            const purpose = (t.purpose || '').toLowerCase();
-            const customer = this.getDisplayCounterCompany(t).toLowerCase();
-
-            // Проверяем по назначению платежа
-            for (const phrase of excludePurposePhrases) {
-                if (purpose.includes(phrase)) {
-                    console.log('Исключено по назначению:', purpose.substring(0, 50));
-                    return false;
+        // Применяем правила исключения из БД (настраиваются в разделе "Настройки")
+        for (const rule of this.storage.getExclusionRules()) {
+            transactions = transactions.filter(t => {
+                // API возвращает поле "type" (purpose | counterparty)
+                let targetValue = '';
+                if (rule.type === 'purpose') {
+                    targetValue = (t.purpose || '').toLowerCase();
+                } else if (rule.type === 'counterparty') {
+                    targetValue = this.getDisplayCounterCompany(t).toLowerCase();
                 }
-            }
-
-            // Проверяем по заказчику
-            for (const name of excludeCustomerNames) {
-                if (customer.includes(name)) {
-                    console.log('Исключено по заказчику:', customer);
-                    return false;
+                const pattern = rule.pattern.toLowerCase();
+                if (rule.is_regex) {
+                    try { return !new RegExp(pattern, 'i').test(targetValue); } catch(e) { return true; }
                 }
-            }
-
-            return true;
-        });
+                return !targetValue.includes(pattern);
+            });
+        }
 
         console.log('После исключений осталось:', transactions.length);
 
@@ -114,13 +72,11 @@ class ReceiptsManager {
 
         let html = '';
         transactions.forEach(transaction => {
-            // Получаем ИНН из загруженных данных или пытаемся извлечь
             let payerINN = transaction.payerINN || '';
             if (!payerINN && this.storage.getINNData()[transaction.payer]) {
                 payerINN = this.storage.getINNData()[transaction.payer];
             }
 
-            // Форматируем сумму
             const amountFormatted = this.storage.formatNumber(transaction.amount);
 
             html += `
@@ -142,126 +98,56 @@ class ReceiptsManager {
 
     updateSummary(transactions) {
         const totalAmount = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
-
         document.getElementById('totalReceiptsCount').textContent = transactions.length;
         document.getElementById('totalReceiptsAmount').textContent =
             this.storage.formatCurrency(totalAmount);
     }
 
-    getBankName(account) {
-        if (!account) return '';
-        const cleanAccount = account.replace(/\s/g, '');
-        const mapping = {
-            '40702810400000204768': 'ПСБ',
-            '40702810240000407651': 'Сбер',
-            '40702810000000011018': 'СДМ',
-            '40702810907700000421': 'БКС',
-            '40702810300000011971': 'МКБ',
-            '40702810040000071672': 'Сбер',
-            '40702810805010002132': 'МКБ',
-            '40702810740000405629': 'Сбер',
-            '40702810340000082125': 'Сбер',
-            '40702810500000141745': 'ГПБ',
-            '40702810500000009494': 'СДМ',
-            '40702810100990012143': 'МИБ',
-            '40702810240000097197': 'Сбер',
-            '40701810540000401219': 'Сбер'
-        };
-        return mapping[cleanAccount] || 'Неизвестный банк';
-    }
-
-    isOurCompany(companyName) {
-        if (!companyName) return false;
-        const upperName = companyName.toUpperCase();
-        return (
-            upperName.includes("СЕРВИС-ИНТЕГРАТОР") ||
-            upperName.includes("СИ УАТ") ||
-            upperName.includes("СЕРВИС ЦМ") ||
-            upperName.includes("СОИР") ||
-            upperName.includes("Управляющая компания Сервис-Интегратор ООО") ||
-            upperName.includes("СЕРВИС-ИНТЕГРАТОР УТ") ||
-            upperName.includes("СЕРВИС-ИНТЕГРАТОР САХАЛИН") ||
-            upperName.includes("СЕРВИС-ИНТЕГРАТОР ЛОГИСТИКА") ||
-            upperName.includes("СЕРВИС-ИНТЕГРАТОР АО") ||
-            upperName.includes("СЕРВИС-ИНТЕГРАТОР АРКТИКА")
-        );
-    }
-
     getDisplayCounterCompany(transaction) {
-        const purpose = (transaction.purpose || "").toLowerCase();
+        const purpose = (transaction.purpose || '').toLowerCase();
+        const payer = (transaction.counterCompany || transaction.payer || '').toLowerCase();
 
-        // Правило 1: СУЭК-Кузбасс АО (ищем "суэк-кузбасс" или часть "куз")
-        if (purpose.includes("суэк-кузбасс") || purpose.includes("куз")) {
-            return "СУЭК-Кузбасс АО";
-        }
-
-        // Правило 2: Запсибнефтехим ООО
-        if (purpose.includes("запсибнефтехим")) {
-            return "ЗАПСИБНЕФТЕХИМ ООО (Выплата финансирования)";
-        }
-
-        // Критерий 2: %% по депозитам
-        const depositPhrases = [
-            "уплата %",
-            "уплата процентов по депозиту",
-            "выплата начисленных процентов по депозиту",
-            "Выплата начисленных процентов",
-            "выплата начисленных процентов по заявке на размещение денежных средств",
-            "размещение на депозите",
-            "размещение вклада",
-            "выплата процентов по депозиту"
-        ];
-        for (const phrase of depositPhrases) {
-            if (purpose.includes(phrase)) {
-                return "%% по депозитам";
+        // Применяем правила категоризации из БД
+        for (const rule of this.storage.getCategorizationRules()) {
+            const fieldValue = rule.field === 'purpose' ? purpose :
+                               rule.field === 'counterparty' ? payer :
+                               (transaction.payerINN || '').toLowerCase();
+            const pattern = rule.pattern.toLowerCase();
+            if (fieldValue.includes(pattern)) {
+                return rule.display_name;
             }
         }
 
-        // Критерий 3: %% по НСО
-        if (purpose.includes("уплата процентов по сделке нсо")) {
-            return "%% по НСО";
-        }
-
-        // Критерий 4: Продажа ТС
-        const tsPhrases = [
-            "дкп",
-            "договор купле-продажи",
-            "договор купле продажи"
-        ];
-        for (const phrase of tsPhrases) {
-            if (purpose.includes(phrase)) {
-                return "Продажа ТС";
+        // Применяем синонимы компаний из БД (парсер уже нормализовал, но на всякий случай)
+        for (const alias of this.storage.getCompanyAliases()) {
+            const pattern = alias.pattern || '';
+            const canonical = alias.canonical || '';
+            if (!pattern || !canonical) continue;
+            if (alias.match_type === 'exact') {
+                if (payer === pattern.toLowerCase() || (transaction.payer || '').toLowerCase() === pattern.toLowerCase()) return canonical;
+            } else if (alias.match_type === 'regex') {
+                try { if (new RegExp(pattern, 'i').test(payer)) return canonical; } catch(e) {}
+            } else {
+                if (payer.includes(pattern.toLowerCase())) return canonical;
             }
         }
-        // Проверка на госномер в формате А000АА123 (буква, три цифры, три буквы)
+
+        // Универсальное правило: госномер = продажа ТС
         const plateRegex = /[авекмнорстух]\d{3}[авекмнорстух]{2}\d{2,3}/i;
-        if (plateRegex.test(purpose)) {
-            return "Продажа ТС";
-        }
+        if (plateRegex.test(purpose)) return 'Продажа ТС';
 
-        // Иначе возвращаем исходного заказчика
-        return transaction.payer || transaction.counterCompany || "";
+        return transaction.payer || transaction.counterCompany || '';
     }
 
     async loadINNData(file) {
         if (!file) return;
-
         try {
-            // Читаем Excel-файл
             const workbook = await this.readExcelFile(file);
             const innData = this.parseINNDataFromExcel(workbook);
-
-            // Сохраняем данные ИНН в хранилище
             this.storage.setINNData(innData);
-
-            // Обновляем транзакции: заменяем наименования заказчиков по совпадению ИНН
             this.updateTransactionsWithINNData(innData);
-
-            // Обновляем таблицу
             this.updateTable();
-
-            window.app.showNotification(`Загружено ${Object.keys(innData).length} ИНН и обновлены транзакции`, 'success');
-
+            window.app.showNotification(`Загружено ${Object.keys(innData).length} ИНН`, 'success');
         } catch (error) {
             console.error('Error loading INN data:', error);
             window.app.showNotification('Ошибка загрузки ИНН', 'error');
@@ -274,74 +160,51 @@ class ReceiptsManager {
             reader.onload = (e) => {
                 try {
                     const data = new Uint8Array(e.target.result);
-                    const workbook = XLSX.read(data, { type: 'array' });
-                    resolve(workbook);
+                    resolve(XLSX.read(data, { type: 'array' }));
                 } catch (error) {
-                    reject(new Error('Ошибка чтения Excel файла: ' + error.message));
+                    reject(new Error('Ошибка чтения Excel: ' + error.message));
                 }
             };
-            reader.onerror = (e) => reject(new Error('Ошибка чтения файла'));
+            reader.onerror = () => reject(new Error('Ошибка чтения файла'));
             reader.readAsArrayBuffer(file);
         });
     }
 
     parseINNDataFromExcel(workbook) {
         const innData = {};
-
-        // Берем первый лист
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-
-        // Конвертируем в JSON (массив объектов)
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
         const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-
-        // Ищем столбцы "ИНН" и "Наименование"
-        let innColumnIndex = -1;
-        let nameColumnIndex = -1;
-
+        let innCol = -1, nameCol = -1;
         if (rows.length > 0) {
-            const headerRow = rows[0];
-            for (let i = 0; i < headerRow.length; i++) {
-                const cell = String(headerRow[i]).toLowerCase();
-                if (cell.includes('инн')) innColumnIndex = i;
-                if (cell.includes('наименование') || cell.includes('название')) nameColumnIndex = i;
-            }
+            rows[0].forEach((cell, i) => {
+                const c = String(cell).toLowerCase();
+                if (c.includes('инн')) innCol = i;
+                if (c.includes('наименование') || c.includes('название')) nameCol = i;
+            });
         }
+        if (innCol === -1) innCol = 0;
+        if (nameCol === -1) nameCol = 1;
 
-        // Если не нашли заголовки, предполагаем, что первый столбец - ИНН, второй - Наименование
-        if (innColumnIndex === -1) innColumnIndex = 0;
-        if (nameColumnIndex === -1) nameColumnIndex = 1;
-
-        // Обрабатываем строки, начиная со второй (индекс 1)
         for (let i = 1; i < rows.length; i++) {
             const row = rows[i];
-            if (!row || row.length <= Math.max(innColumnIndex, nameColumnIndex)) continue;
-
-            let inn = String(row[innColumnIndex] || '').trim();
-            let name = String(row[nameColumnIndex] || '').trim();
-
-            // Очищаем ИНН: оставляем только цифры
-            inn = inn.replace(/\D/g, '');
-
+            if (!row || row.length <= Math.max(innCol, nameCol)) continue;
+            let inn = String(row[innCol] || '').trim().replace(/\D/g, '');
+            let name = String(row[nameCol] || '').trim();
             if (inn.length >= 10 && inn.length <= 12 && name) {
                 innData[inn] = name;
             }
         }
-
         return innData;
     }
 
     updateTransactionsWithINNData(innData) {
-        // Получаем все транзакции
         const allTransactions = this.storage.getTransactions();
         let updated = false;
-
         const updatedTransactions = allTransactions.map(transaction => {
-            // Работаем только с входящими транзакциями, у которых есть payerINN
             if (transaction.direction === 'incoming' && transaction.payerINN) {
                 const correctName = innData[transaction.payerINN];
                 if (correctName) {
-                    // Обновляем поля с наименованием плательщика/контрагента
                     transaction.payer = correctName;
                     transaction.counterCompany = correctName;
                     updated = true;
@@ -349,33 +212,26 @@ class ReceiptsManager {
             }
             return transaction;
         });
-
         if (updated) {
-            // Сохраняем обновленные транзакции обратно в хранилище
             this.storage.setTransactions(updatedTransactions);
         }
     }
 
     exportToExcel() {
         const transactions = this.getFilteredTransactions();
-
         if (transactions.length === 0) {
             alert('Нет данных для экспорта');
             return;
         }
 
-        // Подготовка данных для Excel
         const data = [
             ['Заказчик', 'ИНН заказчика', 'Юридическое лицо', 'Счет получателя',
              'Сумма', 'Банк получателя', 'Назначение платежа', 'Дата', 'Файл источника']
         ];
 
         let totalAmount = 0;
-
         transactions.forEach(t => {
-            // Банк получателя
             const bank = t.ourBank || '';
-
             data.push([
                 this.getDisplayCounterCompany(t),
                 t.payerINN || '',
@@ -387,29 +243,15 @@ class ReceiptsManager {
                 t.date || '',
                 t.sourceFile || ''
             ]);
-
             totalAmount += t.amount;
         });
 
-        // Добавляем итоговую строку
-        data.push([
-            'ИТОГО',
-            '',
-            '',
-            '',
-            totalAmount,
-            '',
-            '',
-            '',
-            ''
-        ]);
+        data.push(['ИТОГО', '', '', '', totalAmount, '', '', '', '']);
 
-        // Создание рабочей книги
         const ws = XLSX.utils.aoa_to_sheet(data);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Поступления');
 
-        // Устанавливаем числовой формат для столбца "Сумма" (индекс 4)
         const range = XLSX.utils.decode_range(ws['!ref']);
         for (let row = 1; row <= range.e.r; row++) {
             const cellAddress = XLSX.utils.encode_cell({ r: row, c: 4 });
@@ -418,7 +260,6 @@ class ReceiptsManager {
             ws[cellAddress].z = '#,##0.00';
         }
 
-        // Выделяем итоговую строку жирным
         const lastRow = range.e.r;
         for (let col = 0; col <= 8; col++) {
             const cellAddress = XLSX.utils.encode_cell({ r: lastRow, c: col });
@@ -426,7 +267,6 @@ class ReceiptsManager {
             ws[cellAddress].s = { font: { bold: true } };
         }
 
-        // Автонастройка ширины столбцов
         const maxWidth = data.reduce((max, row) => Math.max(max, row.length), 0);
         const colWidths = [];
         for (let i = 0; i < maxWidth; i++) {
@@ -440,18 +280,15 @@ class ReceiptsManager {
         }
         ws['!cols'] = colWidths;
 
-        // Сохранение файла
         XLSX.writeFile(wb, `Поступления_${new Date().toISOString().split('T')[0]}.xlsx`, { cellStyles: true });
     }
 
-    // Метод для очистки поиска
     clearSearch() {
         this.searchTerm = '';
         document.getElementById('searchReceipts').value = '';
         this.updateTable();
     }
 
-    // Метод для поиска
     searchTransactions(term) {
         this.searchTerm = term;
         this.updateTable();

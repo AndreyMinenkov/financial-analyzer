@@ -4,29 +4,52 @@ class App {
         this.currentPage = 'upload';
         this.storage = new StorageManager();
         this.receiptsManager = new ReceiptsManager(this.storage);
+        this.expensesReconciliationManager = new ExpensesReconciliationManager(this.storage);
         this.balancesManager = new BalancesManager(this.storage);
         this.debtManager = new DebtReconciliationManager(this.storage);
         this.contractorsLibrary = new ContractorsLibrary();
         this.supplierPayments = new SupplierPaymentsManager(this.contractorsLibrary);
         this.reportsManager = new ReportsManager();
+        this.settingsManager = new SettingsManager(this.storage);
+        window.settingsManager = this.settingsManager;
+        this.parser = new BankStatementParser(); // Парсер банковских выписок
         this.originalWorkbook = null; // Для хранения оригинального файла поставщиков
         this.init();
     }
 
-    init() {
+    async init() {
         console.log('Initializing Financial Analysis App...');
         this.setupNavigation();
         this.setupSidebarToggle();
         this.setupEventListeners();
         this.setupContractorsManager();
         this.reportsManager.init();
-        this.loadCurrentPage();
-        this.updateStats();
+        this.settingsManager.init();
         this.setHeaderDate();
 
         // Устанавливаем сегодняшнюю дату по умолчанию
         const today = new Date().toISOString().split('T')[0];
         document.getElementById('calculationDate').value = today;
+
+        // Загружаем account_mapping из БД, чтобы accounts всегда были доступны
+        // даже до загрузки выписок (для страницы «Остатки»)
+        await this.storage.loadConfig();
+        console.log(`✅ Account mapping загружен: ${Object.keys(this.storage.getAccounts()).length} счетов`);
+
+        // Инициализируем депозиты из БД (с fallback на localStorage)
+        await this.storage.initDeposits();
+
+        // Загружаем библиотеку контрагентов через API (асинхронно)
+        await this.contractorsLibrary.init();
+        console.log(`✅ Библиотека контрагентов инициализирована: ${this.contractorsLibrary.contractors.length} записей`);
+
+        // Загружаем маппинг счетов парсера с сервера
+        this.parser.loadMappingFromServer().then(() => {
+            console.log('✅ Маппинг счетов парсера загружен');
+        });
+
+        this.loadCurrentPage();
+        this.updateStats();
 
         console.log('App initialized successfully');
     }
@@ -80,34 +103,37 @@ class App {
         const navButtons = document.querySelectorAll('.sidebar-nav-btn');
         const pages = document.querySelectorAll('.page');
 
-        // Убираем активный класс у всех кнопок
         navButtons.forEach(btn => btn.classList.remove('active'));
 
-        // Добавляем активный класс текущей кнопке
         const activeButton = Array.from(navButtons).find(btn =>
             btn.getAttribute('data-page') === targetPage
         );
-        if (activeButton) {
-            activeButton.classList.add('active');
-        }
+        if (activeButton) activeButton.classList.add('active');
 
-        // Скрываем все страницы
         pages.forEach(page => {
             page.style.display = 'none';
             page.classList.remove('active');
         });
 
-        // Показываем целевую страницу
+        // Скрываем панель результатов сверки при переключении страниц
+        const reconPanel = document.getElementById('reconciliationResultSection');
+        if (reconPanel) reconPanel.style.display = 'none';
+
         const targetPageElement = document.getElementById(`${targetPage}-page`);
         if (targetPageElement) {
             targetPageElement.style.display = 'block';
             targetPageElement.classList.add('active');
-
-            // Обновляем breadcrumb
             this.updateBreadcrumb(targetPage);
-
-            // Обновляем данные на странице
             this.updatePageData(targetPage);
+
+            // Прокрутка к первому элементу страницы
+            const firstHeader = targetPageElement.querySelector('.page-header h1');
+            if (firstHeader) {
+                firstHeader.scrollIntoView({ block: 'start', behavior: 'instant' });
+            }
+            const pc = document.querySelector('.page-content');
+            if (pc) pc.scrollTop = 0;
+            window.scrollTo(0, 0);
         }
     }
 
@@ -117,25 +143,30 @@ class App {
         const names = {
             upload: 'Загрузка выписок',
             receipts: 'Поступления',
+            'expenses-reconciliation': 'Сверка оплат',
             balances: 'Остатки',
             debt: 'Дебиторка',
             suppliers: 'Оплаты поставщикам',
             library: 'Библиотека',
-            reports: 'Отчёты'
+            reports: 'Отчёты',
+            settings: 'Настройки'
         };
         el.textContent = names[pageName] || pageName;
     }
 
-    updatePageData(pageName) {
+    async updatePageData(pageName) {
         switch(pageName) {
             case 'receipts':
                 this.receiptsManager.updateTable();
+                break;
+            case 'expenses-reconciliation':
+                this.expensesReconciliationManager.updateTable();
                 break;
             case 'balances':
                 this.balancesManager.updateTable();
                 break;
             case 'debt':
-                this.updateReconciliationUI();
+                await this.updateReconciliationUI();
                 break;
             case 'suppliers':
                 this.updateSuppliersUI();
@@ -144,8 +175,13 @@ class App {
                 this.renderLibraryTable();
                 break;
             case 'reports':
-                // При загрузке страницы отчетов ничего дополнительно делать не нужно
-                // Дашборд загружается при нажатии на карточку "Дебиторка"
+                break;
+            case 'settings':
+                await this.settingsManager.loadAllData();
+                // Сброс прокрутки ПОСЛЕ загрузки данных
+                const pc = document.querySelector('.page-content');
+                if (pc) pc.scrollTop = 0;
+                window.scrollTo(0, 0);
                 break;
         }
     }
@@ -171,11 +207,87 @@ class App {
         document.getElementById('libWithExplanation').textContent = libraryStats.withExplanation;
     }
 
-    updateReconciliationUI() {
+    // ✅ НОВЫЙ МЕТОД: Загрузка данных предыдущего дня из БД через API
+    async loadPreviousDayDataFromServer() {
+        try {
+            console.log('🔄 Загрузка данных предыдущего дня из БД...');
+            
+            // Вычисляем вчерашнюю дату
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const dateStr = yesterday.toISOString().split('T')[0];
+            
+            const response = await fetch(`http://31.130.155.16:5000/api/previous-day-data?date=${dateStr}`);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.success && result.data && Object.keys(result.data).length > 0) {
+                const actualDate = result.date || dateStr;
+                console.log(`✅ Загружено ${Object.keys(result.data).length} филиалов из БД за ${actualDate}`);
+                
+                // ✅ ИСПРАВЛЕНИЕ: Загружаем сводные данные из ответа API
+                if (result.summaryDT) {
+                    this.debtManager.summaryDT = {
+                        legal: result.summaryDT.legal || 0,
+                        notRecoverable: result.summaryDT.notRecoverable || 0,
+                        recoverable: result.summaryDT.recoverable || 0
+                    };
+                    this.debtManager.saveSummaryData();
+                    console.log('✅ Загружены сводные данные ДТ из БД:', this.debtManager.summaryDT);
+                }
+                
+                if (result.summarySIUAT) {
+                    this.debtManager.summarySIUAT = {
+                        totalDebt: result.summarySIUAT.totalDebt || 0,
+                        totalOverdue: result.summarySIUAT.totalOverdue || 0,
+                        legal: result.summarySIUAT.legal || 0,
+                        notRecoverable: result.summarySIUAT.notRecoverable || 0,
+                        recoverable: result.summarySIUAT.recoverable || 0
+                    };
+                    this.debtManager.saveSummaryData();
+                    console.log('✅ Загружены сводные данные СИ УАТ из БД:', this.debtManager.summarySIUAT);
+                }
+                
+                // Сохраняем в localStorage для кэша и офлайн-работы (включая сводные)
+                localStorage.setItem('previousDayDebt_manual', JSON.stringify({
+                    data: result.data,
+                    date: actualDate,
+                    summaryDT: result.summaryDT || {},
+                    summarySIUAT: result.summarySIUAT || {}
+                }));
+                
+                // Обновляем текущие данные менеджера
+                this.debtManager.currentSubdivisionData = result.data;
+                
+                return { success: true, data: result.data, source: 'database' };
+            } else {
+                console.log('⚠️ Данные за вчерашний день не найдены в БД, пробуем localStorage');
+                // Пробуем загрузить из localStorage
+                return this.debtManager.getPreviousDayData();
+            }
+        } catch (error) {
+            console.warn('❌ Ошибка загрузки из БД, используем localStorage:', error.message);
+            // Fallback на localStorage если сервер недоступен
+            return this.debtManager.getPreviousDayData();
+        }
+    }
+
+    // ✅ ИЗМЕНЕНИЕ: Загрузка данных из БД при открытии страницы дебиторки
+    async updateReconciliationUI() {
         const stats = this.debtManager.getStats();
+        
+        // ✅ Сначала загружаем данные из БД (независимо от браузера)
+        await this.loadPreviousDayDataFromServer();
+        
         if (stats.debtRows > 0 || stats.receiptsWithDates > 0) {
             this.showReconciliationStats(stats);
         }
+        // Обновляем индикатор данных предыдущего дня при загрузке страницы
+        this.updatePreviousDayIndicator();
     }
 
     setupEventListeners() {
@@ -292,12 +404,30 @@ class App {
             this.balancesManager.saveDeposit();
         });
 
+        document.getElementById('addDepositBtn').addEventListener('click', () => {
+            this.balancesManager.addDeposit();
+        });
+
+        // Enter/Escape в модальном окне депозитов
+        modal.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && modal.classList.contains('active')) {
+                e.preventDefault();
+                this.balancesManager.saveDeposit();
+            }
+            if (e.key === 'Escape' && modal.classList.contains('active')) {
+                modal.classList.remove('active');
+            }
+        });
+
         // Клик вне модального окна
         window.addEventListener('click', (e) => {
             if (e.target === modal) {
                 modal.classList.remove('active');
             }
         });
+
+        // ===== Обработчики для страницы сверки оплат =====
+        this.setupExpensesReconciliationListeners();
 
         // ===== Обработчики для страницы сверки долгов =====
         this.setupDebtReconciliationListeners();
@@ -307,6 +437,9 @@ class App {
 
         // ===== Обработчики для страницы библиотеки =====
         this.setupLibraryListeners();
+
+        // ===== Обработчики для модального окна настроек парсера =====
+        this.setupParserSettingsListeners();
     }
 
     setupDebtReconciliationListeners() {
@@ -417,9 +550,28 @@ class App {
             this.saveSummarySettings();
         });
 
-        // Кнопка сохранения данных текущего дня
+        // Enter/Escape в модальном окне настроек сводных
+        const summarySettingsModal = document.getElementById('summarySettingsModal');
+        summarySettingsModal.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && summarySettingsModal.classList.contains('active')) {
+                e.preventDefault();
+                this.saveSummarySettings();
+            }
+            if (e.key === 'Escape' && summarySettingsModal.classList.contains('active')) {
+                summarySettingsModal.classList.remove('active');
+            }
+        });
+
+        // Кнопка сохранения данных текущего дня (ручное сохранение)
         document.getElementById('saveCurrentDayBtn').addEventListener('click', () => {
-            this.saveCurrentDayData();
+            // Используем новый метод forceCollectAndSave для ручного сохранения
+            const result = this.debtManager.forceCollectAndSave();
+            if (result.success) {
+                this.showNotification(`Сохранено ${result.count} подразделений`, 'success');
+                this.updatePreviousDayIndicator();
+            } else {
+                this.showNotification(result.message, 'error');
+            }
         });
 
         // Кнопка очистки данных предыдущего дня
@@ -504,6 +656,159 @@ class App {
                 document.getElementById('summarySettingsModal').classList.remove('active');
             }
         });
+
+        // ===== НОВЫЕ ОБРАБОТЧИКИ ДЛЯ РАБОТЫ С БД ЧЕРЕЗ API =====
+        
+        // Кнопка загрузки данных предыдущего дня из БД
+        const loadPreviousDayFromDBBtn = document.getElementById('loadPreviousDayFromDBBtn');
+        const previousDayDateInput = document.getElementById('previousDayDateInput');
+        
+        if (loadPreviousDayFromDBBtn && previousDayDateInput) {
+            loadPreviousDayFromDBBtn.addEventListener('click', async () => {
+                const date = previousDayDateInput.value;
+                if (!date) {
+                    this.showNotification('Укажите дату для загрузки', 'error');
+                    return;
+                }
+                
+                this.showLoading();
+                try {
+                    const result = await this.debtManager.loadPreviousDayDataFromAPI(date);
+                    
+                    if (result.success) {
+                        // Обновляем информацию о файле
+                        previousDayFileInfo.innerHTML = `<i class="fas fa-database" style="color: var(--success);"></i> Загружено из БД: ${date} (${Object.keys(result.data).length} ДТ)`;
+                        
+                        // Обновляем таблицу
+                        this.renderPreviousDayDataTable();
+                        
+                        // Обновляем индикатор
+                        this.updatePreviousDayIndicator();
+                        
+                        this.showNotification(`Загружено ${Object.keys(result.data).length} филиалов за ${date}`, 'success');
+                    } else {
+                        this.showNotification(result.message || 'Ошибка загрузки данных', 'error');
+                    }
+                } catch (error) {
+                    console.error('Ошибка загрузки из БД:', error);
+                    this.showNotification('Ошибка подключения к серверу', 'error');
+                } finally {
+                    this.hideLoading();
+                }
+            });
+        }
+
+        // Кнопка сохранения данных текущего дня в БД
+        const saveCurrentDayToDBBtn = document.getElementById('saveCurrentDayToDBBtn');
+        
+        if (saveCurrentDayToDBBtn) {
+            saveCurrentDayToDBBtn.addEventListener('click', async () => {
+                const date = previousDayDateInput.value || new Date().toISOString().split('T')[0];
+                
+                this.showLoading();
+                try {
+                    // Сначала собираем актуальные данные
+                    this.debtManager.collectSubdivisionData(true);
+                    
+                    const result = await this.debtManager.saveCurrentDayDataToAPI(this.debtManager.currentSubdivisionData, date);
+                    
+                    if (result.success) {
+                        this.showNotification(`Сохранено ${result.count} филиалов в БД за ${date}`, 'success');
+                        this.updatePreviousDayIndicator();
+                    } else {
+                        const msg = result.fallback ? 'Данные сохранены локально (БД недоступна)' : (result.error || 'Ошибка сохранения');
+                        this.showNotification(msg, result.fallback ? 'warning' : 'error');
+                    }
+                } catch (error) {
+                    console.error('Ошибка сохранения в БД:', error);
+                    this.showNotification('Ошибка подключения к серверу', 'error');
+                } finally {
+                    this.hideLoading();
+                }
+            });
+        }
+    }
+
+    // ===== ОБРАБОТЧИКИ ДЛЯ СТРАНИЦЫ СВЕРКИ ОПЛАТ =====
+    setupExpensesReconciliationListeners() {
+        // Выбор Excel-файла для сверки
+        const selectExcelBtn = document.getElementById('selectExpensesExcelBtn');
+        const excelFileInput = document.getElementById('expensesExcelFile');
+
+        selectExcelBtn.addEventListener('click', () => {
+            excelFileInput.click();
+        });
+
+        excelFileInput.addEventListener('change', async (e) => {
+            if (e.target.files.length > 0) {
+                await this.loadExpensesExcelFile(e.target.files[0]);
+            }
+        });
+
+        // Кнопка сверки
+        document.getElementById('reconcileExpensesBtn').addEventListener('click', () => {
+            this.performExpensesReconciliation();
+        });
+
+        // Кнопка экспорта
+        document.getElementById('exportExpensesReconciliationBtn').addEventListener('click', () => {
+            this.expensesReconciliationManager.exportToExcel();
+        });
+
+        // Кнопка очистки
+        document.getElementById('clearExpensesReconciliationBtn').addEventListener('click', () => {
+            this.expensesReconciliationManager.clearAll();
+        });
+
+        // Поиск
+        document.getElementById('searchExpenses').addEventListener('input', (e) => {
+            this.expensesReconciliationManager.searchTransactions(e.target.value);
+        });
+
+        // Очистка поиска
+        document.getElementById('clearExpensesSearchBtn').addEventListener('click', () => {
+            this.expensesReconciliationManager.clearSearch();
+        });
+    }
+
+    async loadExpensesExcelFile(file) {
+        this.showLoading();
+        try {
+            const result = await this.expensesReconciliationManager.loadExcelFile(file);
+            if (result.success) {
+                document.getElementById('expensesExcelFileInfo').innerHTML =
+                    `<i class="fas fa-check-circle" style="color: var(--success);"></i> ${file.name} (${result.count} строк)`;
+                document.getElementById('reconcileExpensesBtn').disabled = false;
+                this.showNotification(result.message, 'success');
+            } else {
+                document.getElementById('expensesExcelFileInfo').innerHTML =
+                    `<i class="fas fa-exclamation-circle" style="color: var(--danger);"></i> ${result.message}`;
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            console.error('Ошибка загрузки Excel:', error);
+            this.showNotification('Ошибка загрузки файла', 'error');
+        } finally {
+            this.hideLoading();
+        }
+    }
+
+    performExpensesReconciliation() {
+        this.showLoading();
+        try {
+            const result = this.expensesReconciliationManager.reconcile();
+            if (result.success) {
+                this.expensesReconciliationManager.renderReconciliationResult();
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            console.error('Ошибка сверки:', error);
+            this.showNotification('Ошибка при выполнении сверки', 'error');
+        } finally {
+            this.hideLoading();
+        }
     }
 
     // Настройка управления контрагентами
@@ -554,6 +859,18 @@ class App {
         saveBtn.addEventListener('click', () => {
             contractorsModal.classList.remove('active');
             this.showNotification('Список контрагентов сохранен', 'success');
+        });
+
+        // Enter/Escape в модальном окне контрагентов (дебиторка)
+        contractorsModal.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && contractorsModal.classList.contains('active')) {
+                e.preventDefault();
+                contractorsModal.classList.remove('active');
+                this.showNotification('Список контрагентов сохранен', 'success');
+            }
+            if (e.key === 'Escape' && contractorsModal.classList.contains('active')) {
+                contractorsModal.classList.remove('active');
+            }
         });
     }
 
@@ -655,7 +972,11 @@ class App {
                 this.showReconciliationLog(this.debtManager.getProcessedLog());
                 document.getElementById('exportReconciledBtn').disabled = false;
                 document.getElementById('saveCurrentDayBtn').disabled = false;
-                // Обновляем индикатор данных предыдущего дня
+                
+                // ✅ ИСПРАВЛЕНИЕ: УБРАЛИ преждевременное сохранение!
+                // Сохранение происходит ТОЛЬКО в exportToExcel() после ответа сервера
+                
+                // Обновляем индикатор данных предыдущего дня (показывает текущее состояние localStorage)
                 this.updatePreviousDayIndicator();
                 this.showNotification(result.message, 'success');
             } else {
@@ -918,15 +1239,8 @@ class App {
         }
     }
 
-    // Сохранение данных текущего дня в localStorage для сравнения завтра
-    saveCurrentDayData() {
-        this.debtManager.saveCurrentDayData();
-        this.updatePreviousDayIndicator();
-        this.showNotification('Данные текущего дня сохранены для сравнения завтра', 'success');
-    }
-
     // Сохранение настроек сводных
-    saveSummarySettings() {
+    async saveSummarySettings() {
         // Сохраняем сводные данные ДТ
         this.debtManager.summaryDT = {
             legal: parseFloat(document.getElementById('summaryDtLegal').value) || 0,
@@ -943,13 +1257,27 @@ class App {
             recoverable: parseFloat(document.getElementById('summarySiuatRecoverable').value) || 0
         };
 
+        // ✅ ИСПРАВЛЕНИЕ: Отправляем сводные данные на сервер в БД
+        // чтобы они были доступны при открытии в другом браузере
+        const date = document.getElementById('previousDayDateInput').value || new Date().toISOString().split('T')[0];
+        const filialData = this.debtManager.currentSubdivisionData || {};
+        
+        try {
+            await this.debtManager.saveCurrentDayDataToAPI(filialData, date);
+            console.log('✅ Сводные данные отправлены на сервер');
+        } catch (e) {
+            console.warn('⚠️ Не удалось отправить сводные на сервер:', e);
+        }
+
         // Сохраняем дату предыдущего дня
         const previousDate = document.getElementById('previousDayDateInput').value;
         const previousInfo = this.debtManager.getPreviousDayData();
         if (Object.keys(previousInfo.data || previousInfo).length > 0 || previousDate) {
             localStorage.setItem('previousDayDebt_manual', JSON.stringify({
                 data: previousInfo.data || previousInfo,
-                date: previousDate
+                date: previousDate,
+                summaryDT: this.debtManager.summaryDT,
+                summarySIUAT: this.debtManager.summarySIUAT
             }));
         }
 
@@ -983,13 +1311,6 @@ class App {
             indicator.className = 'previous-day-indicator warning';
             indicatorText.textContent = 'Данные за предыдущий день не заполнены. Откройте Настройки сводных.';
         }
-    }
-
-    // Экранирование HTML
-    escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
     }
 
     handleFileSelect(files) {
@@ -1051,17 +1372,33 @@ class App {
         this.showLoading();
 
         try {
-            const parser = new BankStatementParser();
-            const results = await parser.processFiles(files);
+            // Загружаем настройки (исключения, категоризация, синонимы) с сервера перед парсингом
+            await this.storage.loadConfig();
+            console.log('Настройки загружены:', {
+                exclusionRules: this.storage.getExclusionRules().length,
+                categorizationRules: this.storage.getCategorizationRules().length,
+                companyAliases: this.storage.getCompanyAliases().length
+            });
+
+            // Инициализируем парсер настройками из БД (company aliases для нормализации)
+            await this.parser.init(this.storage);
+
+            const results = await this.parser.processFiles(files);
 
             // Сохраняем данные
             this.storage.setStatements(results.statements);
             this.storage.setTransactions(results.transactions);
-            this.storage.setAccounts(results.accounts);
+
+            // Обновляем счета данными из выписок (merge, не перезапись),
+            // чтобы сохранить все счета из account_mapping в таблице «Остатки»
+            for (const [accountNumber, accountData] of Object.entries(results.accounts)) {
+                this.storage.updateAccount(accountNumber, accountData);
+            }
 
             // Обновляем интерфейс
             this.updateStats();
             this.receiptsManager.updateTable();
+            this.expensesReconciliationManager.updateTable();
             this.balancesManager.updateTable();
 
             // Показываем уведомление
@@ -1075,12 +1412,16 @@ class App {
         }
     }
 
-    clearFiles() {
+    async clearFiles() {
         if (confirm('Вы уверены, что хотите очистить список файлов?')) {
             this.storage.clearFiles();
+            // Восстанавливаем account_mapping из БД после очистки,
+            // чтобы счета всегда отображались в таблице «Остатки»
+            await this.storage.loadConfig();
             this.updateFileList();
             this.updateStats();
             this.receiptsManager.updateTable();
+            this.expensesReconciliationManager.updateTable();
             this.balancesManager.updateTable();
         }
     }
@@ -1199,23 +1540,28 @@ class App {
     }
 
     renderSuppliersContent() {
-        const container = document.getElementById('suppliersContent');
+        const emptyState = document.getElementById('suppliersEmptyState');
+        const dataArea = document.getElementById('suppliersDataArea');
         const pivotTables = this.supplierPayments.getPivotTables();
 
         if (pivotTables.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon">
-                        <i class="fas fa-cloud-upload-alt"></i>
-                    </div>
-                    <h3 class="empty-state-title">Загрузите Excel-файл с реестрами</h3>
-                    <p class="empty-state-description">Загрузите Excel-файл с реестрами заявок для формирования сводных таблиц</p>
-                </div>
-            `;
+            // Показываем empty-state, скрываем данные
+            emptyState.style.display = '';
+            dataArea.innerHTML = '';
             return;
         }
 
-        let html = '';
+        // Скрываем empty-state, показываем данные
+        emptyState.style.display = 'none';
+
+        // ✅ Кнопка экспорта — отображается вверху, перед таблицами
+        let html = `
+            <div style="display: flex; justify-content: flex-end; gap: 12px; margin-bottom: 24px;">
+                <button id="exportSuppliersBtn" class="btn btn-success">
+                    <i class="fas fa-file-excel"></i> Экспорт в Excel
+                </button>
+            </div>
+        `;
 
         pivotTables.forEach((pivot, index) => {
             html += `
@@ -1241,7 +1587,8 @@ class App {
             let grandTotal = 0;
 
             pivot.pivotData.forEach(row => {
-                html += `<tr>`;
+                const rowClass = row.needsReview ? ' class="row-needs-review"' : '';
+                html += `<tr${rowClass}>`;
                 html += `<td><strong>${row.contractor}</strong></td>`;
 
                 pivot.pivotHeaders.forEach(h => {
@@ -1252,7 +1599,12 @@ class App {
 
                 grandTotal += row.total;
                 html += `<td class="number-cell" style="font-weight: 600;">${this.storage.formatNumber(row.total)}</td>`;
-                html += `<td style="color: var(--text-secondary); font-size: 13px;">${row.explanation || ''}</td>`;
+
+                // Подсветка пояснения, требующего проверки
+                const explStyle = row.needsReview
+                    ? ' style="color: var(--warning); font-size: 13px; font-style: italic;" title="Требует проверки — смысл не извлечён"'
+                    : ' style="color: var(--text-secondary); font-size: 13px;"';
+                html += `<td${explStyle}>${row.explanation || ''}</td>`;
                 html += `</tr>`;
             });
 
@@ -1274,16 +1626,7 @@ class App {
             `;
         });
 
-        // Кнопка экспорта
-        html += `
-            <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px;">
-                <button id="exportSuppliersBtn" class="btn btn-success">
-                    <i class="fas fa-file-excel"></i> Экспорт в Excel
-                </button>
-            </div>
-        `;
-
-        container.innerHTML = html;
+        dataArea.innerHTML = html;
 
         // Обработчик экспорта
         document.getElementById('exportSuppliersBtn').addEventListener('click', () => {
@@ -1342,8 +1685,9 @@ class App {
         });
 
         // Очистка
-        document.getElementById('libClearBtn').addEventListener('click', () => {
-            const result = this.contractorsLibrary.clearAll();
+        document.getElementById('libClearBtn').addEventListener('click', async () => {
+            if (!confirm('Вы уверены, что хотите очистить всю библиотеку контрагентов?')) return;
+            const result = await this.contractorsLibrary.clearAll();
             if (result.success) {
                 this.renderLibraryTable();
                 this.updateLibraryStats();
@@ -1413,9 +1757,52 @@ class App {
             });
         });
 
-        // Сохранение контрагента
-        document.getElementById('saveContractorBtn').addEventListener('click', () => {
-            this.saveContractor();
+        // Сохранение контрагента (используем новый id из модального окна)
+        document.getElementById('saveContractorBtn').addEventListener('click', async () => {
+            await this.saveContractorFromModal();
+        });
+
+        // Закрытие модального окна контрагента
+        document.getElementById('closeContractorModal').addEventListener('click', () => {
+            document.getElementById('contractorModal').style.display = 'none';
+        });
+        document.getElementById('cancelContractorBtn').addEventListener('click', () => {
+            document.getElementById('contractorModal').style.display = 'none';
+        });
+
+        // Enter в модальном окне контрагента → сохранить
+        const contractorModal = document.getElementById('contractorModal');
+        contractorModal.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && contractorModal.style.display !== 'none') {
+                e.preventDefault();
+                this.saveContractorFromModal();
+            }
+            if (e.key === 'Escape' && contractorModal.style.display !== 'none') {
+                contractorModal.style.display = 'none';
+            }
+        });
+
+        // Подтверждение удаления
+        document.getElementById('closeConfirmDeleteModal').addEventListener('click', () => {
+            document.getElementById('confirmDeleteModal').style.display = 'none';
+        });
+        document.getElementById('cancelDeleteBtn').addEventListener('click', () => {
+            document.getElementById('confirmDeleteModal').style.display = 'none';
+        });
+        document.getElementById('confirmDeleteBtn').addEventListener('click', async () => {
+            await this.performDeleteContractor();
+        });
+
+        // Enter/Escape в модальном окне подтверждения удаления
+        const confirmDeleteModal = document.getElementById('confirmDeleteModal');
+        confirmDeleteModal.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && confirmDeleteModal.style.display !== 'none') {
+                e.preventDefault();
+                this.performDeleteContractor();
+            }
+            if (e.key === 'Escape' && confirmDeleteModal.style.display !== 'none') {
+                confirmDeleteModal.style.display = 'none';
+            }
         });
 
         // Закрытие фильтров при клике на оверлей
@@ -1438,8 +1825,9 @@ class App {
             if (e.key === 'Escape') {
                 this.closeAllFilterDropdowns();
             }
-            // Enter открывает редактирование выбранной строки
-            if (e.key === 'Enter' && this.selectedRowId) {
+            // Enter открывает редактирование выбранной строки (только если не открыто модальное окно)
+            const anyModalOpen = document.querySelector('.modal-overlay[style*="display: flex"], .modal-overlay[style*="display: block"], .modal.active');
+            if (e.key === 'Enter' && this.selectedRowId && !anyModalOpen) {
                 this.openEditContractorModal(this.selectedRowId);
             }
         });
@@ -1638,7 +2026,7 @@ class App {
             const isSelected = contractor.id === this.selectedRowId;
             html += `
                 <tr data-id="${contractor.id}" ${isSelected ? 'class="selected"' : ''}>
-                    <td><strong>${contractor.name}</strong></td>
+                    <td>${contractor.name}</td>
                     <td>${contractor.organization || '<span style="color: var(--text-tertiary);">—</span>'}</td>
                     <td style="color: var(--text-secondary); font-size: 12px;">${contractor.explanation || '<span style="color: var(--text-tertiary);">—</span>'}</td>
                     <td class="actions-cell">
@@ -1681,11 +2069,11 @@ class App {
 
         // Обработчики удаления
         tbody.querySelectorAll('.delete-contractor').forEach(btn => {
-            btn.addEventListener('click', (e) => {
+            btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const contractor = this.contractorsLibrary.contractors.find(c => c.id === btn.dataset.id);
                 if (contractor && confirm(`Удалить "${contractor.name}"?`)) {
-                    this.contractorsLibrary.removeContractor(btn.dataset.id);
+                    await this.contractorsLibrary.removeContractor(btn.dataset.id);
                     if (this.selectedRowId === btn.dataset.id) {
                         this.selectedRowId = null;
                     }
@@ -1707,54 +2095,23 @@ class App {
         });
     }
 
-    openAddContractorModal() {
-        document.getElementById('contractorModalTitle').textContent = 'Добавить контрагента';
-        document.getElementById('contractorId').value = '';
-        document.getElementById('contractorName').value = '';
-        document.getElementById('contractorOrganization').value = '';
-        document.getElementById('contractorExplanation').value = '';
-        document.getElementById('addContractorModal').classList.add('active');
-
-        // Фокус на первое поле
-        setTimeout(() => document.getElementById('contractorName').focus(), 100);
-
-        // Enter для сохранения
-        document.getElementById('contractorForm').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                this.saveContractor();
-            }
-        });
+    async performDeleteContractor() {
+        const id = document.getElementById('deleteContractorId').value;
+        if (id) {
+            await this.contractorsLibrary.removeContractor(id);
+            this.renderLibraryTable();
+            this.updateLibraryStats();
+            this.showNotification('Контрагент удалён', 'info');
+        }
+        document.getElementById('confirmDeleteModal').style.display = 'none';
     }
 
-    openEditContractorModal(id) {
-        const contractor = this.contractorsLibrary.contractors.find(c => c.id === id);
-        if (!contractor) return;
-
-        document.getElementById('contractorModalTitle').textContent = 'Редактировать контрагента';
-        document.getElementById('contractorId').value = contractor.id;
-        document.getElementById('contractorName').value = contractor.name;
-        document.getElementById('contractorOrganization').value = contractor.organization || '';
-        document.getElementById('contractorExplanation').value = contractor.explanation || '';
-        document.getElementById('addContractorModal').classList.add('active');
-
-        // Фокус на первое поле
-        setTimeout(() => document.getElementById('contractorName').focus(), 100);
-
-        // Enter для сохранения
-        document.getElementById('contractorForm').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                this.saveContractor();
-            }
-        });
-    }
-
-    saveContractor() {
-        const id = document.getElementById('contractorId').value;
-        const name = document.getElementById('contractorName').value.trim();
-        const organization = document.getElementById('contractorOrganization').value.trim();
-        const explanation = document.getElementById('contractorExplanation').value.trim();
+    // Метод для работы с модальным окном contractorModal
+    async saveContractorFromModal() {
+        const id = document.getElementById('editContractorId').value;
+        const name = document.getElementById('editContractorName').value.trim();
+        const organization = document.getElementById('editContractorOrg').value.trim();
+        const explanation = document.getElementById('editContractorExplanation').value.trim();
 
         if (!name) {
             this.showNotification('Введите наименование контрагента', 'error');
@@ -1763,19 +2120,48 @@ class App {
 
         let result;
         if (id) {
-            result = this.contractorsLibrary.updateContractor(id, { name, organization, explanation });
+            result = await this.contractorsLibrary.updateContractor(id, { name, organization, explanation });
         } else {
-            result = this.contractorsLibrary.addContractor({ name, organization, explanation });
+            result = await this.contractorsLibrary.addContractor({ name, organization, explanation });
         }
 
         if (result.success || result.updated) {
-            document.getElementById('addContractorModal').classList.remove('active');
+            document.getElementById('contractorModal').style.display = 'none';
             this.renderLibraryTable();
             this.updateSuppliersUI();
             this.showNotification(result.message, 'success');
         } else {
-            this.showNotification(result.message, 'error');
+            this.showNotification(result.message || 'Ошибка сохранения', 'error');
         }
+    }
+
+    // Обновлённый метод открытия модалки для добавления (использует новое окно contractorModal)
+    openAddContractorModal() {
+        document.getElementById('contractorModalTitle').textContent = 'Добавить контрагента';
+        document.getElementById('editContractorId').value = '';
+        document.getElementById('editContractorName').value = '';
+        document.getElementById('editContractorOrg').value = '';
+        document.getElementById('editContractorExplanation').value = '';
+        document.getElementById('contractorModal').style.display = 'flex';
+
+        // Фокус на первое поле
+        setTimeout(() => document.getElementById('editContractorName').focus(), 100);
+    }
+
+    // Обновлённый метод открытия модалки для редактирования
+    openEditContractorModal(id) {
+        const contractor = this.contractorsLibrary.contractors.find(c => c.id === id || String(c.id) === String(id));
+        if (!contractor) return;
+
+        document.getElementById('contractorModalTitle').textContent = 'Редактировать контрагента';
+        document.getElementById('editContractorId').value = contractor.id;
+        document.getElementById('editContractorName').value = contractor.name;
+        document.getElementById('editContractorOrg').value = contractor.organization || '';
+        document.getElementById('editContractorExplanation').value = contractor.explanation || '';
+        document.getElementById('contractorModal').style.display = 'flex';
+
+        // Фокус на первое поле
+        setTimeout(() => document.getElementById('editContractorName').focus(), 100);
     }
 
     async importLibraryFromExcel(file) {
@@ -1797,6 +2183,313 @@ class App {
         } finally {
             this.hideLoading();
         }
+    }
+
+    // ===== ОБРАБОТЧИКИ МОДАЛЬНОГО ОКНА НАСТРОЕК ПАРСЕРА =====
+    setupParserSettingsListeners() {
+        const modal = document.getElementById('parserSettingsModal');
+
+        // Открытие модального окна по кнопке на странице загрузки
+        const openBtn = document.getElementById('openParserSettingsBtn');
+        if (openBtn) {
+            openBtn.addEventListener('click', () => this.openParserSettings());
+        }
+
+        // Закрытие модального окна
+        const closeBtn = document.getElementById('closeParserSettingsModal');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => modal.classList.remove('active'));
+        }
+
+        document.querySelectorAll('#parserSettingsModal .close-modal').forEach(btn => {
+            btn.addEventListener('click', () => modal.classList.remove('active'));
+        });
+
+        // Клик вне модального окна
+        window.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.classList.remove('active');
+            }
+        });
+
+        // Добавление нового счёта
+        document.getElementById('addMappingBtn').addEventListener('click', () => {
+            this.addMappingEntry();
+        });
+
+        // Enter в полях формы
+        ['newAccountNumber', 'newCompanyName', 'newBankName'].forEach(id => {
+            document.getElementById(id).addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.addMappingEntry();
+                }
+            });
+        });
+
+        // Синхронизация с сервером
+        document.getElementById('syncMappingBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('syncMappingBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Синхронизация...';
+            try {
+                const result = await this.parser.syncMappingToServer();
+                if (result.success) {
+                    this.showNotification(`Синхронизировано: добавлено ${result.added}, обновлено ${result.updated}`, 'success');
+                } else {
+                    this.showNotification('Ошибка синхронизации: ' + (result.error || 'неизвестная ошибка'), 'error');
+                }
+            } catch (error) {
+                this.showNotification('Ошибка подключения к серверу', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Синхронизировать с сервером';
+            }
+        });
+
+        // Загрузка с сервера
+        document.getElementById('reloadMappingBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('reloadMappingBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Загрузка...';
+            try {
+                await this.parser.loadMappingFromServer();
+                this.renderMappingTable();
+                this.loadMappingDatalists();
+                this.showNotification('Маппинг загружен с сервера', 'success');
+            } catch (error) {
+                this.showNotification('Ошибка загрузки с сервера', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-download"></i> Загрузить с сервера';
+            }
+        });
+
+        // Поисковый фильтр в модальном окне
+        const searchInput = document.getElementById('mappingSearchInput');
+        if (searchInput) {
+            searchInput.addEventListener('input', () => this.filterMappingTable());
+        }
+    }
+
+    async addMappingEntry() {
+        const accountNumber = document.getElementById('newAccountNumber').value.trim();
+        const companyName = document.getElementById('newCompanyName').value.trim();
+        const bankName = document.getElementById('newBankName').value.trim();
+
+        if (!accountNumber || !companyName) {
+            this.showNotification('Номер счёта и название компании обязательны', 'error');
+            return;
+        }
+
+        // Обновляем локальный маппинг
+        const mapping = { ...this.parser.accountMapping };
+        mapping[accountNumber] = { company: companyName, bank: bankName };
+        this.parser.saveAccountMapping(mapping);
+
+        // Отправляем на сервер
+        try {
+            const response = await fetch('/api/account-mapping', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    account_number: accountNumber,
+                    company_name: companyName,
+                    bank_name: bankName
+                })
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                if (result.success) {
+                    this.showNotification(`Счёт ${accountNumber} добавлен`, 'success');
+                }
+            } else {
+                console.warn('Сервер недоступен, сохранено локально');
+                this.showNotification('Сохранено локально (сервер недоступен)', 'warning');
+            }
+        } catch (error) {
+            console.warn('Ошибка отправки на сервер:', error);
+            this.showNotification('Сохранено локально (сервер недоступен)', 'warning');
+        }
+
+        // Очищаем поля
+        document.getElementById('newAccountNumber').value = '';
+        document.getElementById('newCompanyName').value = '';
+        document.getElementById('newBankName').value = '';
+
+        // Обновляем таблицу
+        this.renderMappingTable();
+        this.loadMappingDatalists();
+
+        // Фокус на поле счёта
+        document.getElementById('newAccountNumber').focus();
+    }
+
+    renderMappingTable() {
+        const tbody = document.getElementById('mappingTableBody');
+        const mapping = this.parser.getMappingForUI();
+
+        document.getElementById('mappingCount').textContent = `Записей: ${mapping.length}`;
+
+        if (mapping.length === 0) {
+            tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Маппинг пуст</td></tr>';
+            return;
+        }
+
+        let html = '';
+        mapping.forEach(item => {
+            html += `
+                <tr>
+                    <td style="font-family: monospace; font-size: 12px;">${item.account_number}</td>
+                    <td>${this.escapeHtml(item.company_name)}</td>
+                    <td>${this.escapeHtml(item.bank_name) || '<span style="color: var(--text-tertiary);">—</span>'}</td>
+                    <td>
+                        <button class="btn btn-xs btn-danger delete-mapping" data-account="${item.account_number}" title="Удалить">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+
+        tbody.innerHTML = html;
+
+        // Обработчики удаления
+        tbody.querySelectorAll('.delete-mapping').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const account = btn.dataset.account;
+                if (confirm(`Удалить счёт ${account} из маппинга?`)) {
+                    this.deleteMappingEntry(account);
+                }
+            });
+        });
+    }
+
+    async deleteMappingEntry(accountNumber) {
+        // Удаляем из локального маппинга
+        const mapping = { ...this.parser.accountMapping };
+        delete mapping[accountNumber];
+        this.parser.saveAccountMapping(mapping);
+
+        // Отправляем на сервер (мягкое удаление через API)
+        try {
+            // Сначала получаем id записи
+            const response = await fetch('/api/account-mapping?all=true');
+            if (response.ok) {
+                const result = await response.json();
+                if (result.success && result.data) {
+                    const entry = result.data.find(e => e.account_number === accountNumber && e.is_active);
+                    if (entry) {
+                        await fetch(`/api/account-mapping/${entry.id}`, { method: 'DELETE' });
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn('Ошибка удаления на сервере:', error);
+        }
+
+        // Обновляем таблицу
+        this.renderMappingTable();
+        this.loadMappingDatalists();
+        this.showNotification(`Счёт ${accountNumber} удалён`, 'success');
+    }
+
+    async loadMappingDatalists() {
+        // Загружаем списки компаний и банков для автодополнения
+        try {
+            const [companiesRes, banksRes] = await Promise.all([
+                fetch('/api/companies'),
+                fetch('/api/banks')
+            ]);
+
+            if (companiesRes.ok) {
+                const companies = await companiesRes.json();
+                const datalist = document.getElementById('companiesList');
+                if (datalist && companies.data) {
+                    datalist.innerHTML = companies.data.map(c => `<option value="${c}">`).join('');
+                }
+            }
+
+            if (banksRes.ok) {
+                const banks = await banksRes.json();
+                const datalist = document.getElementById('banksList');
+                if (datalist && banks.data) {
+                    datalist.innerHTML = banks.data.map(b => `<option value="${b}">`).join('');
+                }
+            }
+        } catch (error) {
+            // Fallback: используем локальные данные
+            const mapping = this.parser.getMappingForUI();
+            const companies = [...new Set(mapping.map(m => m.company_name).filter(Boolean))].sort();
+            const banks = [...new Set(mapping.map(m => m.bank_name).filter(Boolean))].sort();
+
+            const companiesDatalist = document.getElementById('companiesList');
+            if (companiesDatalist) {
+                companiesDatalist.innerHTML = companies.map(c => `<option value="${c}">`).join('');
+            }
+
+            const banksDatalist = document.getElementById('banksList');
+            if (banksDatalist) {
+                banksDatalist.innerHTML = banks.map(b => `<option value="${b}">`).join('');
+            }
+        }
+
+        // Также заполняем локальными данными для надёжности
+        const mapping = this.parser.getMappingForUI();
+        const companies = [...new Set(mapping.map(m => m.company_name).filter(Boolean))].sort();
+        const banks = [...new Set(mapping.map(m => m.bank_name).filter(Boolean))].sort();
+
+        // Дополняем datalist локальными значениями, если их нет
+        const companiesDatalist = document.getElementById('companiesList');
+        if (companiesDatalist) {
+            const existingOptions = new Set(Array.from(companiesDatalist.options).map(o => o.value));
+            companies.forEach(c => {
+                if (!existingOptions.has(c)) {
+                    companiesDatalist.innerHTML += `<option value="${c}">`;
+                }
+            });
+        }
+
+        const banksDatalist = document.getElementById('banksList');
+        if (banksDatalist) {
+            const existingOptions = new Set(Array.from(banksDatalist.options).map(o => o.value));
+            banks.forEach(b => {
+                if (!existingOptions.has(b)) {
+                    banksDatalist.innerHTML += `<option value="${b}">`;
+                }
+            });
+        }
+    }
+
+    openParserSettings() {
+        // Загружаем данные перед открытием
+        this.renderMappingTable();
+        this.loadMappingDatalists();
+        document.getElementById('parserSettingsModal').classList.add('active');
+        // Очищаем поисковый фильтр при открытии
+        const searchInput = document.getElementById('mappingSearchInput');
+        if (searchInput) searchInput.value = '';
+    }
+
+    filterMappingTable() {
+        const query = document.getElementById('mappingSearchInput').value.toLowerCase().trim();
+        const rows = document.querySelectorAll('#mappingTableBody tr:not(.empty-row)');
+        let visibleCount = 0;
+
+        rows.forEach(row => {
+            const text = row.textContent.toLowerCase();
+            if (!query || text.includes(query)) {
+                row.style.display = '';
+                visibleCount++;
+            } else {
+                row.style.display = 'none';
+            }
+        });
+
+        document.getElementById('mappingCount').textContent = 
+            `Показано: ${visibleCount} из ${this.parser.getMappingForUI().length}`;
     }
 }
 

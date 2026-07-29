@@ -1,0 +1,44 @@
+[Unit]
+Description=Financial Analyzer Gunicorn Server
+Documentation=https://github.com/AndreyMinenkov/financial-analyzer
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=forking
+PIDFile=/var/run/financial-analyzer.pid
+WorkingDirectory=/opt/financial-analyzer
+
+# Переменные окружения БД (настроить под реальные значения)
+Environment=DB_HOST=127.0.0.1
+Environment=DB_PORT=5432
+Environment=DB_NAME=financial_analyzer
+Environment=DB_USER=postgres
+Environment=DB_PASSWORD=Kapapa661109
+Environment=DB_CONNECT_TIMEOUT=5
+Environment=DB_POOL_MIN=2
+Environment=DB_POOL_MAX=10
+Environment=GUNICORN_WORKERS=2
+
+# Запуск gunicorn
+ExecStart=/opt/financial-analyzer/.venv/bin/gunicorn --config /opt/financial-analyzer/gunicorn.conf.py server:app
+ExecReload=/bin/kill -s HUP $MAINPID
+ExecStop=/bin/kill -s TERM $MAINPID
+
+# Перезапуск при сбое
+Restart=always
+RestartSec=5
+
+# Timeout для graceful shutdown (должен быть > graceful_timeout в gunicorn)
+TimeoutStopSec=60
+
+# Запуск от непривилегированного пользователя
+# User=financial-analyzer
+# Group=financial-analyzer
+
+# Защита
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

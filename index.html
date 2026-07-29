@@ -26,13 +26,17 @@
             </div>
 
             <nav class="sidebar-nav">
-                <button class="sidebar-nav-btn active" data-page="upload">
+                <button class="sidebar-nav-btn" data-page="upload">
                     <i class="fas fa-upload"></i>
                     <span class="sidebar-nav-text">Загрузка выписок</span>
                 </button>
                 <button class="sidebar-nav-btn" data-page="receipts">
                     <i class="fas fa-arrow-down"></i>
                     <span class="sidebar-nav-text">Поступления</span>
+                </button>
+                <button class="sidebar-nav-btn" data-page="expenses-reconciliation">
+                    <i class="fas fa-scale-balanced"></i>
+                    <span class="sidebar-nav-text">Сверка оплат</span>
                 </button>
                 <button class="sidebar-nav-btn" data-page="balances">
                     <i class="fas fa-wallet"></i>
@@ -46,6 +50,10 @@
                     <i class="fas fa-truck"></i>
                     <span class="sidebar-nav-text">Оплаты поставщикам</span>
                 </button>
+                <button class="sidebar-nav-btn" data-page="cashflow">
+                    <i class="fas fa-money-bill-wave"></i>
+                    <span class="sidebar-nav-text">ДДС по подразделениям</span>
+                </button>
                 <button class="sidebar-nav-btn" data-page="library">
                     <i class="fas fa-address-book"></i>
                     <span class="sidebar-nav-text">Библиотека</span>
@@ -53,6 +61,10 @@
                 <button class="sidebar-nav-btn" data-page="reports">
                     <i class="fas fa-chart-bar"></i>
                     <span class="sidebar-nav-text">Отчёты</span>
+                </button>
+                <button class="sidebar-nav-btn" data-page="settings">
+                    <i class="fas fa-cog"></i>
+                    <span class="sidebar-nav-text">Настройки</span>
                 </button>
             </nav>
 
@@ -85,13 +97,171 @@
 
             <!-- Page Content -->
             <div class="page-content">
+<!-- Страница: Настройки -->
+                <div id="settings-page" class="page" style="display: none;">
+                    <div class="page-header">
+                        <div>
+                            <h1><i class="fas fa-cog"></i> Настройки</h1>
+                            <p class="page-description">Гибкая настройка правил фильтрации, категоризации и маппинга счетов</p>
+                        </div>
+                    </div>
+
+                    <!-- Поиск -->
+                    <div class="settings-search-bar">
+                        <input type="text" id="settingsSearch" class="search-input" placeholder="&#128269; Поиск по текущей вкладке...">
+                        <button id="settingsClearSearch" class="btn btn-sm btn-secondary" style="display:none;" title="Очистить поиск">✕</button>
+                    </div>
+
+                    <!-- Табы -->
+                    <div class="settings-tabs">
+                        <button class="settings-tab active" data-tab="accounts">📋 Счета</button>
+                        <button class="settings-tab" data-tab="exclusions">🚫 Исключения</button>
+                        <button class="settings-tab" data-tab="categorization">🏷 Категоризация</button>
+                        <button class="settings-tab" data-tab="aliases">🔄 Синонимы</button>
+                    </div>
+
+                    <!-- Панель: Счета -->
+                    <div class="settings-panel" id="settings-accounts" style="display: block;">
+                        <div class="settings-panel-header">
+                            <h3>Маппинг счетов</h3>
+                            <div>
+                                <input type="text" class="settings-account-input has-tooltip" data-tooltip="20 цифр расчётного счёта. Счета также добавляются автоматически при загрузке выписок." placeholder="Номер счёта (20 цифр)" maxlength="20" id="settingsNewAccountNumber">
+                                <input type="text" class="settings-account-input has-tooltip" data-tooltip="Ваше юрлицо, которому принадлежит этот счёт" placeholder="Название компании" id="settingsNewAccountCompany">
+                                <input type="text" class="settings-account-input has-tooltip" data-tooltip="Название банка, в котором открыт этот счёт" placeholder="Банк (опционально)" id="settingsNewAccountBank">
+                                <button class="btn btn-sm btn-primary" id="settingsAddAccountBtn">Добавить</button>
+                                <input type="file" id="importAccountsFile" accept=".xlsx,.xls" style="display:none">
+                                <button class="btn btn-sm btn-secondary" id="importAccountsBtn">📥 Импорт Excel</button>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>Номер счёта</th>
+                                        <th>Компания</th>
+                                        <th>Банк</th>
+                                        <th>Активен</th>
+                                        <th>Действие</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="accountsTableBody">
+                                    <tr><td colspan="5" style="text-align:center;padding:20px;color:#999;">Загрузка...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Панель: Правила исключения -->
+                    <div class="settings-panel" id="settings-exclusions" style="display: none;">
+                        <div class="settings-panel-header">
+                            <h3>Правила исключения</h3>
+                            <div>
+                                <select id="exclusionType" class="has-tooltip" data-tooltip="Где искать: в назначении платежа или по названию контрагента">
+                                    <option value="purpose">Назначение</option>
+                                    <option value="counterparty">Контрагент</option>
+                                </select>
+                                <input type="text" id="exclusionPattern" class="has-tooltip" data-tooltip="Слово или фраза для поиска. Пример: 'налог' скроет все платежи с этим словом в назначении. Если включить Regex — можно использовать регулярное выражение." placeholder="Шаблон (текст или regex)">
+                                <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; white-space: nowrap;">
+                                    <input type="checkbox" id="exclusionIsRegex"> Regex
+                                </label>
+                                <button class="btn btn-sm btn-primary" id="addExclusionBtn">Добавить</button>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>Тип</th>
+                                        <th>Шаблон</th>
+                                        <th>Режим</th>
+                                        <th>Действие</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="exclusionTableBody">
+                                    <tr><td colspan="4" style="text-align:center;padding:20px;color:#999;">Загрузка...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Панель: Правила категоризации -->
+                    <div class="settings-panel" id="settings-categorization" style="display: none;">
+                        <div class="settings-panel-header">
+                            <h3>Правила категоризации</h3>
+                            <div>
+                                <select id="catField" class="has-tooltip" data-tooltip="Где искать совпадение: в назначении платежа или по контрагенту">
+                                    <option value="purpose">Назначение</option>
+                                    <option value="counterparty">Контрагент</option>
+                                </select>
+                                <input type="text" id="catPattern" class="has-tooltip" data-tooltip="Текст для поиска в выбранном поле. Например: 'аренда' найдёт все назначения платежей с этим словом." placeholder="Шаблон (часть текста)">
+                                <input type="text" id="catDisplayName" class="has-tooltip" data-tooltip="Имя заказчика, которое будет показано в таблице поступлений. Пример: 'Арендаторы'" placeholder="Отображаемое имя">
+                                <button class="btn btn-sm btn-primary" id="addCategorizationBtn">Добавить</button>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>Поле</th>
+                                        <th>Шаблон</th>
+                                        <th>Показывать как</th>
+                                        <th>Действие</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="categorizationTableBody">
+                                    <tr><td colspan="4" style="text-align:center;padding:20px;color:#999;">Загрузка...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Панель: Синонимы компаний -->
+                    <div class="settings-panel" id="settings-aliases" style="display: none;">
+                        <div class="settings-panel-header">
+                            <h3>Синонимы названий компаний</h3>
+                            <div>
+                                <input type="text" id="aliasPattern" class="has-tooltip" data-tooltip="Текст, который нужно найти в названии компании. Например: 'ООО Ромашка'" placeholder="Шаблон (вариант названия)">
+                                <input type="text" id="aliasCanonical" class="has-tooltip" data-tooltip="Единое название, на которое будут заменены все совпадения. Например: 'Ромашка'" placeholder="Каноническое название">
+                                <select id="aliasMatchType" class="has-tooltip" data-tooltip="Содержит — ищет подстроку. Точное — полное совпадение. Regex — регулярное выражение.">
+                                    <option value="contains">Содержит</option>
+                                    <option value="exact">Точное</option>
+                                    <option value="regex">Regex</option>
+                                </select>
+                                <button class="btn btn-sm btn-primary" id="addAliasBtn">Добавить</button>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>Шаблон</th>
+                                        <th>Каноническое имя</th>
+                                        <th>Тип</th>
+                                        <th>Действие</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="aliasesTableBody">
+                                    <tr><td colspan="4" style="text-align:center;padding:20px;color:#999;">Загрузка...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+            
+
 
                 <!-- Страница загрузки выписок -->
-                <div id="upload-page" class="page active">
+                <div id="upload-page" class="page">
                     <div class="page-header">
                         <div>
                             <h1><i class="fas fa-upload"></i> Загрузка банковских выписок</h1>
                             <p class="page-description">Загрузите файлы выписок из банка в формате 1С для анализа операций</p>
+                        </div>
+                        <div class="header-actions">
+                            <button id="openParserSettingsBtn" class="btn btn-secondary" title="Настройки парсера">
+                                <i class="fas fa-cog"></i> Настройки парсера
+                            </button>
                         </div>
                     </div>
 
@@ -228,6 +398,177 @@
                     </div>
                 </div>
 
+                <!-- Страница сверки оплат -->
+                <div id="expenses-reconciliation-page" class="page">
+                    <div class="page-header">
+                        <div>
+                            <h1><i class="fas fa-scale-balanced"></i> Сверка оплат</h1>
+                            <p class="page-description">Сверка расходных операций из банковских выписок с данными из Excel</p>
+                        </div>
+                        <div class="header-actions">
+                            <button id="clearExpensesReconciliationBtn" class="btn btn-secondary">
+                                <i class="fas fa-trash"></i> Очистить
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Поиск -->
+                    <div class="search-section">
+                        <div class="search-wrapper">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" id="searchExpenses" placeholder="Поиск по контрагенту, назначению или юрлицу...">
+                            <button id="clearExpensesSearchBtn" class="btn-clear">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Сводка по расходам -->
+                    <div class="summary-cards" id="expensesSummaryCards">
+                        <div class="summary-card">
+                            <div class="summary-icon summary-icon-blue">
+                                <i class="fas fa-receipt"></i>
+                            </div>
+                            <div class="summary-info">
+                                <div class="summary-label">Всего расходов</div>
+                                <div class="summary-value" id="totalExpensesCount">0</div>
+                            </div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="summary-icon summary-icon-green">
+                                <i class="fas fa-ruble-sign"></i>
+                            </div>
+                            <div class="summary-info">
+                                <div class="summary-label">Общая сумма расходов</div>
+                                <div class="summary-value" id="totalExpensesAmount">0 ₽</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Загрузка Excel и действия -->
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; padding: 12px 0;">
+                        <input type="file" id="expensesExcelFile" accept=".xlsx,.xls" style="display: none;">
+                        <button id="selectExpensesExcelBtn" class="btn btn-secondary">
+                            <i class="fas fa-file-excel"></i> Загрузить Excel для сверки
+                        </button>
+                        <span class="file-info" id="expensesExcelFileInfo" style="font-size: 13px; color: var(--text-secondary);">
+                            <i class="fas fa-info-circle"></i> Столбцы: Списание, Назначение платежа, Контрагент, Организация
+                        </span>
+                        <button id="reconcileExpensesBtn" class="btn btn-primary" disabled>
+                            <i class="fas fa-sync-alt"></i> Сверка
+                        </button>
+                        <button id="exportExpensesReconciliationBtn" class="btn btn-success" disabled>
+                            <i class="fas fa-file-excel"></i> Экспорт в Excel
+                        </button>
+                    </div>
+
+                    <!-- Таблица расходов из выписок -->
+                    <div class="table-container" id="expensesTableContainer">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Контрагент</th>
+                                    <th>Счет контрагента</th>
+                                    <th>Юридическое лицо</th>
+                                    <th>Наш счет</th>
+                                    <th>Сумма</th>
+                                    <th>Банк</th>
+                                    <th>Назначение платежа</th>
+                                    <th>Дата</th>
+                                </tr>
+                            </thead>
+                            <tbody id="expensesTableBody">
+                                <tr class="empty-row">
+                                    <td colspan="8">Загрузите выписки на странице "Загрузка выписок"</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Результаты сверки (отдельно, вне страницы) -->
+                <div id="reconciliationResultSection" class="recon-result-panel" style="display: none;">
+                    <!-- Сводка -->
+                    <div class="recon-summary-row">
+                        <div class="recon-summary-item recon-summary-matched">
+                            <div class="recon-summary-num" id="recMatchedCount">0</div>
+                            <div class="recon-summary-label">Сопоставлено</div>
+                        </div>
+                        <div class="recon-summary-item recon-summary-statement">
+                            <div class="recon-summary-num" id="recOnlyStatementCount">0</div>
+                            <div class="recon-summary-label">Только в выписке</div>
+                        </div>
+                        <div class="recon-summary-item recon-summary-excel">
+                            <div class="recon-summary-num" id="recOnlyExcelCount">0</div>
+                            <div class="recon-summary-label">Только в Excel</div>
+                        </div>
+                        <div class="recon-summary-item recon-summary-commissions">
+                            <div class="recon-summary-num" id="recCommissionsCount">0</div>
+                            <div class="recon-summary-label">Банковских комиссий</div>
+                        </div>
+                    </div>
+
+                    <!-- Комиссии — сворачиваемый блок -->
+                    <details class="recon-collapsible" id="reconCommissionsBlock" style="display: none;">
+                        <summary class="recon-collapsible-summary">
+                            <i class="fas fa-university"></i> Банковские комиссии — <span id="recCommissionsAmount">0 ₽</span>
+                            <i class="fas fa-chevron-down recon-arrow"></i>
+                        </summary>
+                        <div class="table-container" style="margin-top: 12px;">
+                            <table class="data-table recon-table">
+                                <thead>
+                                    <tr>
+                                        <th>Дата</th>
+                                        <th>Банк</th>
+                                        <th>Сумма</th>
+                                        <th>Назначение</th>
+                                        <th>Юрлицо</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="commissionsTableBody"></tbody>
+                            </table>
+                        </div>
+                    </details>
+
+                    <!-- Фильтр + единая таблица результатов -->
+                    <div class="recon-filter-bar">
+                        <div class="recon-filter-tabs">
+                            <button class="recon-filter-tab active" data-filter="all">Все</button>
+                            <button class="recon-filter-tab" data-filter="matched">
+                                <i class="fas fa-check-circle"></i> Сопоставлено
+                            </button>
+                            <button class="recon-filter-tab" data-filter="only_statement">
+                                <i class="fas fa-file-alt"></i> Только в выписке
+                            </button>
+                            <button class="recon-filter-tab" data-filter="only_excel">
+                                <i class="fas fa-file-excel"></i> Только в Excel
+                            </button>
+                        </div>
+                        <div class="recon-filter-stats" id="reconFilterStats"></div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table recon-table" id="reconMainTable">
+                            <thead>
+                                <tr>
+                                    <th style="width: 60px;">Статус</th>
+                                    <th style="width: 90px;">Дата</th>
+                                    <th style="width: 110px;">Сумма выписки</th>
+                                    <th style="width: 110px;">Сумма Excel</th>
+                                    <th>Контрагент (выписка)</th>
+                                    <th>Контрагент (Excel)</th>
+                                    <th>Назначение (выписка)</th>
+                                    <th>Назначение (Excel)</th>
+                                    <th>Юрлицо</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reconMainTableBody">
+                                <tr class="empty-row"><td colspan="9">Нажмите «Сверка» для отображения результатов</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <!-- Страница остатков -->
                 <div id="balances-page" class="page">
                     <div class="page-header">
@@ -284,6 +625,17 @@
                         </div>
                     </div>
 
+                    <!-- Поисковый фильтр -->
+                    <div class="search-section">
+                        <div class="search-wrapper">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" id="balancesSearchInput" placeholder="Поиск по компании, банку или номеру счёта...">
+                            <button id="balancesClearSearchBtn" class="btn-clear">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="table-container">
                         <table class="data-table">
                             <thead>
@@ -317,7 +669,7 @@
                         </div>
                         <div class="header-actions">
                             <button class="btn btn-secondary" id="summarySettingsBtn" title="Настройки сводных таблиц">
-                                <i class="fas fa-cog"></i> Настройки сводных
+                                <i class="fas fa-cog"></i> Настройки
                             </button>
                             <button class="btn btn-primary" id="reconcileBtn" disabled>
                                 <i class="fas fa-sync-alt"></i> Выполнить сверку
@@ -464,10 +816,6 @@
                             <p class="page-description">Сводные таблицы по оплатам контрагентам</p>
                         </div>
                         <div class="header-actions">
-                            <button id="uploadSuppliersBtn" class="btn btn-primary">
-                                <i class="fas fa-file-excel"></i> Загрузить файл Excel
-                            </button>
-                            <input type="file" id="suppliersFileUpload" accept=".xlsx,.xls" style="display: none;">
                             <button id="goToLibraryBtn" class="btn btn-secondary">
                                 <i class="fas fa-address-book"></i> Библиотека контрагентов
                             </button>
@@ -498,12 +846,152 @@
 
                     <!-- Реестры и сводные таблицы -->
                     <div id="suppliersContent">
-                        <div class="empty-state">
+                        <div class="empty-state" id="suppliersEmptyState">
                             <div class="empty-state-icon">
                                 <i class="fas fa-cloud-upload-alt"></i>
                             </div>
                             <h3 class="empty-state-title">Загрузите Excel-файл с реестрами</h3>
                             <p class="empty-state-description">Загрузите Excel-файл с реестрами заявок для формирования сводных таблиц</p>
+                            <div style="margin-top: 20px;">
+                                <button id="uploadSuppliersBtn" class="btn btn-primary">
+                                    <i class="fas fa-file-excel"></i> Загрузить файл Excel
+                                </button>
+                                <input type="file" id="suppliersFileUpload" accept=".xlsx,.xls" style="display: none;">
+                            </div>
+                        </div>
+                        <div id="suppliersDataArea"></div>
+                    </div>
+                </div>
+
+                <!-- Страница ДДС по подразделениям -->
+                <div id="cashflow-page" class="page">
+                    <div class="page-header">
+                        <div>
+                            <h1><i class="fas fa-money-bill-wave"></i> ДДС по подразделениям</h1>
+                            <p class="page-description">Распределение налогов пропорционально выручке и формирование ДДС</p>
+                        </div>
+                        <div class="header-actions">
+                            <button id="exportCashflowBtn" class="btn btn-success" disabled>
+                                <i class="fas fa-file-excel"></i> Экспорт в Excel
+                            </button>
+                            <button id="clearCashflowBtn" class="btn btn-secondary">
+                                <i class="fas fa-trash"></i> Очистить
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="debt-reconciliation-section">
+                        <div class="reconciliation-upload-grid">
+                            <!-- Загрузка файла -->
+                            <div class="upload-card" style="grid-column: 1 / -1;">
+                                <div class="upload-card-header">
+                                    <div class="upload-card-icon upload-card-icon-blue">
+                                        <i class="fas fa-file-excel"></i>
+                                    </div>
+                                    <h3>Исходный файл с данными ДДС</h3>
+                                </div>
+                                <div class="file-drop-area" id="cashflowDropArea">
+                                    <i class="fas fa-cloud-upload-alt"></i>
+                                    <p>Перетащите Excel-файл с данными ДДС или</p>
+                                    <button class="btn btn-secondary" id="selectCashflowBtn">Выберите файл</button>
+                                    <input type="file" id="cashflowFile" accept=".xlsx,.xls" style="display: none;">
+                                </div>
+                                <div class="file-info" id="cashflowFileInfo">
+                                    <i class="fas fa-info-circle"></i> Файл не выбран. Ожидаемый формат: вкладка "Источник"
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Настройки распределения -->
+                        <div class="reconciliation-stats" id="cashflowSettings" style="display: none;">
+                            <h3><i class="fas fa-cog"></i> Настройки распределения</h3>
+                            <div class="stats-grid">
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-blue"><i class="fas fa-calendar-alt"></i></div>
+                                    <div class="stat-label">Период отчётности</div>
+                                    <div class="period-selector" style="margin-top: 8px;">
+                                        <label class="radio-label"><input type="radio" name="periodType" value="month" checked><span>Месяц</span></label>
+                                        <label class="radio-label"><input type="radio" name="periodType" value="quarter"><span>Квартал</span></label>
+                                        <label class="radio-label"><input type="radio" name="periodType" value="year"><span>Год</span></label>
+                                        <label class="radio-label"><input type="radio" name="periodType" value="custom"><span>Произвольный</span></label>
+                                    </div>
+                                    <div id="periodMonth" class="period-control" style="display: block; margin-top: 8px;">
+                                        <select id="selectMonth" class="form-select"><option value="">Выберите месяц</option></select>
+                                    </div>
+                                    <div id="periodQuarter" class="period-control" style="display: none; margin-top: 8px;">
+                                        <select id="selectYear" class="form-select"><option value="2026">2026</option><option value="2025">2025</option><option value="2024">2024</option></select>
+                                        <select id="selectQuarter" class="form-select"><option value="К1">К1</option><option value="К2">К2</option><option value="К3">К3</option><option value="К4">К4</option></select>
+                                    </div>
+                                    <div id="periodYear" class="period-control" style="display: none; margin-top: 8px;">
+                                        <select id="selectYearOnly" class="form-select"><option value="2026">2026</option><option value="2025">2025</option><option value="2024">2024</option></select>
+                                    </div>
+                                    <div id="periodCustom" class="period-control" style="display: none; margin-top: 8px;">
+                                        <input type="date" id="customDateFrom" class="form-input"><span style="margin: 0 8px;">—</span><input type="date" id="customDateTo" class="form-input">
+                                    </div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-green"><i class="fas fa-chart-pie"></i></div>
+                                    <div class="stat-label">Стратегия распределения</div>
+                                    <select id="allocationStrategy" class="form-select" style="margin-top: 8px; width: 100%;">
+                                        <option value="revenue">Пропорционально выручке</option>
+                                    </select>
+                                    <p style="font-size: 12px; color: var(--text-secondary); margin-top: 6px;">Налоги распределяются между подразделениями пропорционально их доле в общей выручке</p>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-orange"><i class="fas fa-filter"></i></div>
+                                    <div class="stat-label">Исключения из расчёта долей</div>
+                                    <div class="checkbox-group" style="margin-top: 8px;">
+                                        <label class="checkbox-label"><input type="checkbox" id="excludeVGO" checked><span>ВГО (внутренние переброски)</span></label>
+                                        <label class="checkbox-label"><input type="checkbox" id="excludeDeposits" checked><span>Депозиты и проценты</span></label>
+                                        <label class="checkbox-label"><input type="checkbox" id="excludeTransfers" checked><span>Перечисления между счетами</span></label>
+                                    </div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-purple"><i class="fas fa-calculator"></i></div>
+                                    <div class="stat-label">Округление</div>
+                                    <div class="radio-group" style="margin-top: 8px;">
+                                        <label class="radio-label"><input type="radio" name="rounding" value="kopeks" checked><span>До копеек</span></label>
+                                        <label class="radio-label"><input type="radio" name="rounding" value="rubles"><span>До рублей</span></label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+                                <button id="applyCashflowSettingsBtn" class="btn btn-primary"><i class="fas fa-play"></i> Сформировать ДДС</button>
+                            </div>
+                        </div>
+
+                        <!-- Превью результатов -->
+                        <div class="reconciliation-stats" id="cashflowPreview" style="display: none;">
+                            <h3><i class="fas fa-chart-bar"></i> Результаты распределения</h3>
+                            <div class="stats-grid">
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-blue"><i class="fas fa-building"></i></div>
+                                    <div class="stat-label">Подразделений</div>
+                                    <div class="stat-value" id="previewFilialsCount">0</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-green"><i class="fas fa-file-invoice"></i></div>
+                                    <div class="stat-label">Строк данных</div>
+                                    <div class="stat-value" id="previewRowsCount">0</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-orange"><i class="fas fa-coins"></i></div>
+                                    <div class="stat-label">Налогов к распределению</div>
+                                    <div class="stat-value" id="previewTaxesCount">0</div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon stat-icon-purple"><i class="fas fa-chart-line"></i></div>
+                                    <div class="stat-label">Общая выручка</div>
+                                    <div class="stat-value" id="previewTotalRevenue">0 ₽</div>
+                                </div>
+                            </div>
+                            <div style="margin-top: 20px;">
+                                <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 12px;">Доли подразделений в выручке</h4>
+                                <div id="filialsSharesContainer" class="shares-grid"></div>
+                            </div>
+                            <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+                                <button id="exportResultsBtn" class="btn btn-success"><i class="fas fa-download"></i> Скачать Excel</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -666,7 +1154,247 @@
                     </div>
                 </div>
 
-            </div> <!-- /.page-content -->
+                <!-- Страница отчётов (Dashboard) - С ВКЛАДКАМИ -->
+                <div id="reports-page" class="page">
+                    <div class="page-header">
+                        <div>
+                            <h1><i class="fas fa-chart-bar"></i> Отчёты и дашборды</h1>
+                            <p class="page-description">Анализ динамики дебиторской задолженности по филиалам и контрагентам</p>
+                        </div>
+                    </div>
+
+                    <!-- Блок выбора раздела -->
+                    <div class="report-sections">
+                        <div class="report-card report-card-debt" id="reportCardDebt">
+                            <div class="report-card-icon">
+                                <i class="fas fa-file-invoice-dollar"></i>
+                            </div>
+                            <div class="report-card-info">
+                                <h3>Дебиторка</h3>
+                                <p>Динамика просроченной задолженности по филиалам и контрагентам</p>
+                            </div>
+                            <div class="report-card-arrow">
+                                <i class="fas fa-arrow-right"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Панель дашборда (скрыта по умолчанию) -->
+                    <div id="dashboardPanel" style="display: none;">
+                        <!-- Шапка дашборда (только заголовок + назад) -->
+                        <div class="dashboard-header">
+                            <button class="btn btn-secondary" id="backToReportsBtn">
+                                <i class="fas fa-arrow-left"></i> Назад к отчётам
+                            </button>
+                            <h2 id="dashboardTitle">Дебиторка — Динамика ПДЗ</h2>
+                        </div>
+
+                        <!-- Фильтры + кнопка Сформировать в одной строке -->
+                        <div class="dashboard-filters">
+                            <div class="filter-group">
+                                <label>Период с:</label>
+                                <input type="date" id="dashFromDate">
+                            </div>
+                            <div class="filter-group">
+                                <label>по:</label>
+                                <input type="date" id="dashToDate">
+                            </div>
+                            <div class="filter-group">
+                                <label>Филиал (ДТ):</label>
+                                <select id="dashFilialSelect">
+                                    <option value="">— Все филиалы —</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Контрагент:</label>
+                                <select id="dashCounterpartySelect">
+                                    <option value="">— Все контрагенты —</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-primary" id="buildDashboardBtn">
+                                <i class="fas fa-sync-alt"></i> Сформировать
+                            </button>
+                        </div>
+
+                        <!-- Сводные карточки (видны всегда, над вкладками) -->
+                        <div class="summary-cards" id="dashboardSummaryCards">
+                            <div class="summary-card">
+                                <div class="summary-icon summary-icon-blue">
+                                    <i class="fas fa-calendar-check"></i>
+                                </div>
+                                <div class="summary-info">
+                                    <div class="summary-label">Сверок за период</div>
+                                    <div class="summary-value" id="dashSwipeCount">—</div>
+                                </div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-icon summary-icon-green">
+                                    <i class="fas fa-arrow-down"></i>
+                                </div>
+                                <div class="summary-info">
+                                    <div class="summary-label">Мин. ПДЗ</div>
+                                    <div class="summary-value" id="dashMinOverdue">—</div>
+                                </div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-icon summary-icon-orange">
+                                    <i class="fas fa-arrow-up"></i>
+                                </div>
+                                <div class="summary-info">
+                                    <div class="summary-label">Макс. ПДЗ</div>
+                                    <div class="summary-value" id="dashMaxOverdue">—</div>
+                                </div>
+                            </div>
+                            <div class="summary-card">
+                                <div class="summary-icon summary-icon-purple">
+                                    <i class="fas fa-chart-line"></i>
+                                </div>
+                                <div class="summary-info">
+                                    <div class="summary-label">Средняя ПДЗ</div>
+                                    <div class="summary-value" id="dashAvgOverdue">—</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- ВКЛАДКИ ДАШБОРДА -->
+                        <div class="dashboard-tabs">
+                            <button class="tab-btn active" data-tab="overview">
+                                <i class="fas fa-chart-pie"></i> Обзор
+                            </button>
+                            <button class="tab-btn" data-tab="details">
+                                <i class="fas fa-table"></i> Детализация
+                            </button>
+                            <button class="tab-btn" data-tab="comparison">
+                                <i class="fas fa-chart-line"></i> Сравнение
+                            </button>
+                        </div>
+
+                        <!-- Вкладка 1: ОБЗОР -->
+                        <div id="tab-overview" class="tab-content active">
+                            <!-- Два графика в 2 колонки -->
+                            <div class="charts-grid-2col">
+                                <div class="chart-container">
+                                    <h3>Динамика ПДЗ (Топ-5 филиалов)</h3>
+                                    <canvas id="overdueTrendChart"></canvas>
+                                </div>
+                                <div class="chart-container">
+                                    <h3>Динамика по контрагентам</h3>
+                                    <canvas id="counterpartyTrendChart"></canvas>
+                                </div>
+                            </div>
+
+                            <!-- История сверок — сворачиваемая панель -->
+                            <details class="collapsible-panel">
+                                <summary class="collapsible-summary">
+                                    <i class="fas fa-history"></i> История сверок
+                                    <i class="fas fa-chevron-down collapsible-arrow"></i>
+                                </summary>
+                                <div class="table-container">
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Дата</th>
+                                                <th>Общая ПДЗ</th>
+                                                <th>Общая ДЗ</th>
+                                                <th>Филиалов</th>
+                                                <th>Контрагентов</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="swipeHistoryBody">
+                                            <tr class="empty-row">
+                                                <td colspan="5">Нажмите «Сформировать» для загрузки данных</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </details>
+                        </div>
+
+                        <!-- Вкладка 2: ДЕТАЛИЗАЦИЯ -->
+                        <div id="tab-details" class="tab-content">
+                            <!-- Фильтры детализации + экспорт в одной строке -->
+                            <div class="details-filters">
+                                <div class="filter-group">
+                                    <label>Основной период:</label>
+                                    <select id="detailMainPeriod">
+                                        <option value="decade">Декада</option>
+                                        <option value="month" selected>Месяц</option>
+                                        <option value="quarter">Квартал</option>
+                                        <option value="year">Год</option>
+                                    </select>
+                                </div>
+                                <div class="filter-group">
+                                    <label>Детализация:</label>
+                                    <select id="detailBreakdown">
+                                        <option value="decade">Декада</option>
+                                        <option value="day">День</option>
+                                    </select>
+                                </div>
+                                <button id="applyDetailFiltersBtn" class="btn btn-primary">
+                                    <i class="fas fa-sync-alt"></i> Применить
+                                </button>
+                                <button id="exportFilialsBtn" class="btn btn-success">
+                                    <i class="fas fa-download"></i> Экспорт в Excel
+                                </button>
+                            </div>
+
+                            <!-- Таблица всех филиалов -->
+                            <div class="table-container">
+                                <table class="data-table" id="filialsDetailTable">
+                                    <thead>
+                                        <tr id="filialsDetailHeader">
+                                            <th style="width: 50px; text-align: center;">#</th>
+                                            <th>Филиал</th>
+                                            <th class="dynamic-col">ПДЗ</th>
+                                            <th class="dynamic-col">Дельта в %</th>
+                                            <th class="dynamic-col" style="text-align: center;">Направление тренда</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="filialsDetailBody">
+                                        <tr class="empty-row">
+                                            <td colspan="5">Нажмите «Сформировать» для загрузки данных</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                <div class="table-subtitle-row" id="detailTableSubtitle">Показано взвешенное среднее ПДЗ за каждый подпериод</div>
+                            </div>
+                        </div>
+
+                        <!-- Вкладка 3: СРАВНЕНИЕ -->
+                        <div id="tab-comparison" class="tab-content">
+                            <!-- Выбор филиалов для сравнения -->
+                            <div class="comparison-selector">
+                                <h3>
+                                    <i class="fas fa-filter"></i> Выберите филиалы для сравнения
+                                </h3>
+                                <div id="filialCheckboxes">
+                                    <!-- Чекбоксы будут добавлены динамически -->
+                                </div>
+                                <div class="comparison-actions">
+                                    <button class="btn btn-sm btn-primary" id="selectTop5Btn">
+                                        <i class="fas fa-star"></i> Топ-5
+                                    </button>
+                                    <button class="btn btn-sm btn-secondary" id="selectAllFilialsBtn">
+                                        <i class="fas fa-check-square"></i> Все
+                                    </button>
+                                    <button class="btn btn-sm btn-secondary" id="clearSelectionBtn">
+                                        <i class="fas fa-times-circle"></i> Сбросить
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- График сравнения выбранных филиалов -->
+                            <div class="chart-container">
+                                <h3>Сравнение выбранных филиалов</h3>
+                                <canvas id="comparisonChart"></canvas>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+                </div> <!-- /#reports-page -->
+
+                </div> <!-- /.page-content -->
         </main>
     </div> <!-- /.app-layout -->
 
@@ -678,28 +1406,20 @@
                 <span class="close-modal">&times;</span>
             </div>
             <div class="modal-body">
-                <form id="depositForm">
-                    <div class="form-group">
-                        <label for="editCompany">Компания</label>
-                        <input type="text" id="editCompany" readonly>
-                    </div>
-                    <div class="form-group">
-                        <label for="editAccount">Счет</label>
-                        <input type="text" id="editAccount" readonly>
-                    </div>
-                    <div class="form-group">
-                        <label for="editDepositAmount">Сумма депозита</label>
-                        <input type="number" id="editDepositAmount" step="0.01" placeholder="Введите сумму">
-                    </div>
-                    <div class="form-group">
-                        <label for="editInterestRate">Процентная ставка</label>
-                        <input type="number" id="editInterestRate" step="0.01" placeholder="Введите ставку в %">
-                    </div>
-                    <div class="form-group">
-                        <label for="editStartDate">Дата начала</label>
-                        <input type="date" id="editStartDate">
-                    </div>
-                </form>
+                <div class="form-group">
+                    <label>Компания</label>
+                    <input type="text" id="editCompany" readonly style="width: 100%; padding: 8px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-tertiary);">
+                </div>
+                <div class="form-group">
+                    <label>Счет</label>
+                    <input type="text" id="editAccount" readonly style="width: 100%; padding: 8px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-tertiary);">
+                </div>
+                <div id="depositListContainer" style="max-height: 360px; overflow-y: auto; margin-bottom: 12px;">
+                    <!-- Динамически заполняется -->
+                </div>
+                <button id="addDepositBtn" class="btn btn-sm btn-secondary" style="width: 100%;">
+                    <i class="fas fa-plus"></i> Добавить депозит
+                </button>
             </div>
             <div class="modal-footer">
                 <button id="saveDepositBtn" class="btn btn-primary">Сохранить</button>
@@ -729,37 +1449,6 @@
             <div class="modal-footer">
                 <button id="saveContractorsBtn" class="btn btn-primary">Сохранить</button>
                 <button class="btn btn-secondary" id="cancelContractorsBtn">Отмена</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Модальное окно добавления/редактирования контрагента -->
-    <div id="addContractorModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3><i class="fas fa-user-plus"></i> <span id="contractorModalTitle">Добавить контрагента</span></h3>
-                <span class="close-modal" id="closeAddContractorModal">&times;</span>
-            </div>
-            <div class="modal-body">
-                <form id="contractorForm">
-                    <input type="hidden" id="contractorId">
-                    <div class="form-group">
-                        <label for="contractorName">Получатель</label>
-                        <input type="text" id="contractorName" placeholder="Введите наименование контрагента" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="contractorOrganization">Юридическое Лицо</label>
-                        <input type="text" id="contractorOrganization" placeholder="Введите юридическое лицо (необязательно)">
-                    </div>
-                    <div class="form-group">
-                        <label for="contractorExplanation">Пояснения</label>
-                        <input type="text" id="contractorExplanation" placeholder="Введите типичное пояснение">
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button id="saveContractorBtn" class="btn btn-primary">Сохранить</button>
-                <button class="btn btn-secondary close-modal">Отмена</button>
             </div>
         </div>
     </div>
@@ -888,158 +1577,162 @@
         </div>
     </div>
 
-    <!-- Страница отчётов (Dashboard) -->
-    <div id="reports-page" class="page">
-        <div class="page-header">
-            <div>
-                <h1><i class="fas fa-chart-bar"></i> Отчёты и дашборды</h1>
-                <p class="page-description">Анализ динамики дебиторской задолженности по филиалам и контрагентам</p>
+    <!-- Модальное окно настроек парсера (маппинг счетов) -->
+    <div id="parserSettingsModal" class="modal">
+        <div class="modal-content modal-large" style="max-width: 800px; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header" style="flex-shrink: 0;">
+                <h3><i class="fas fa-cog"></i> Настройки парсера — маппинг счетов</h3>
+                <span class="close-modal" id="closeParserSettingsModal">&times;</span>
+            </div>
+            <div class="modal-body" style="flex: 1; overflow-y: auto; padding: 20px;">
+                <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 16px;">
+                    Управляйте привязкой расчётных счетов к компаниям и банкам. Эти данные используются парсером банковских выписок для автоматического определения нашей компании и банка по номеру счёта.
+                </p>
+
+                <!-- Форма добавления нового счёта -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 8px; margin-bottom: 16px; align-items: end;">
+                    <div>
+                        <label style="font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; display: block; margin-bottom: 4px;">Номер счёта</label>
+                        <input type="text" id="newAccountNumber" placeholder="40702810..." maxlength="20" style="width: 100%; padding: 8px 10px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); font-size: 13px; font-family: monospace;">
+                    </div>
+                    <div>
+                        <label style="font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; display: block; margin-bottom: 4px;">Компания</label>
+                        <input type="text" id="newCompanyName" placeholder="Название компании" list="companiesList" style="width: 100%; padding: 8px 10px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); font-size: 13px;">
+                        <datalist id="companiesList"></datalist>
+                    </div>
+                    <div>
+                        <label style="font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; display: block; margin-bottom: 4px;">Банк</label>
+                        <input type="text" id="newBankName" placeholder="Название банка" list="banksList" style="width: 100%; padding: 8px 10px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); font-size: 13px;">
+                        <datalist id="banksList"></datalist>
+                    </div>
+                    <div>
+                        <button id="addMappingBtn" class="btn btn-primary" style="padding: 8px 16px; white-space: nowrap;">
+                            <i class="fas fa-plus"></i> Добавить
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Поисковый фильтр -->
+                <div style="margin-bottom: 8px;">
+                    <input type="text" id="mappingSearchInput" placeholder="🔍 Поиск по номеру счёта, компании или банку..." style="width: 100%; padding: 8px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); font-size: 13px;">
+                </div>
+
+                <!-- Кнопки управления -->
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <span id="mappingCount" style="font-size: 12px; color: var(--text-secondary);">Записей: 0</span>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="syncMappingBtn" class="btn btn-sm btn-secondary" style="font-size: 12px;">
+                            <i class="fas fa-sync-alt"></i> Синхронизировать с сервером
+                        </button>
+                        <button id="reloadMappingBtn" class="btn btn-sm btn-secondary" style="font-size: 12px;">
+                            <i class="fas fa-download"></i> Загрузить с сервера
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Таблица маппинга -->
+                <div style="max-height: 400px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: var(--radius-sm);">
+                    <table class="data-table" style="min-width: auto;">
+                        <thead>
+                            <tr>
+                                <th style="width: 200px;">Номер счёта</th>
+                                <th>Компания</th>
+                                <th style="width: 120px;">Банк</th>
+                                <th style="width: 80px;">Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mappingTableBody">
+                            <tr class="empty-row">
+                                <td colspan="4">Загрузка данных...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer" style="flex-shrink: 0;">
+                <button class="btn btn-secondary close-modal">Закрыть</button>
             </div>
         </div>
+    </div>
 
-        <!-- Блок выбора раздела -->
-        <div class="report-sections">
-            <div class="report-card report-card-debt" id="reportCardDebt">
-                <div class="report-card-icon">
-                    <i class="fas fa-file-invoice-dollar"></i>
+    <!-- Модальное окно: добавление/редактирование контрагента -->
+    <div class="modal-overlay" id="contractorModal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="contractorModalTitle">Добавить контрагента</h3>
+                <button class="modal-close" id="closeContractorModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="editContractorId" value="">
+                <div class="form-group">
+                    <label for="editContractorName">Наименование контрагента *</label>
+                    <input type="text" id="editContractorName" placeholder="Введите наименование контрагента" class="form-input" required>
                 </div>
-                <div class="report-card-info">
-                    <h3>Дебиторка</h3>
-                    <p>Динамика просроченной задолженности по филиалам и контрагентам</p>
+                <div class="form-group">
+                    <label for="editContractorOrg">Юридическое лицо</label>
+                    <input type="text" id="editContractorOrg" placeholder="Введите юридическое лицо" class="form-input">
                 </div>
-                <div class="report-card-arrow">
-                    <i class="fas fa-arrow-right"></i>
+                <div class="form-group">
+                    <label for="editContractorExplanation">Пояснение к платежам</label>
+                    <textarea id="editContractorExplanation" placeholder="Введите типовое пояснение к платежам" class="form-textarea" rows="4"></textarea>
                 </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancelContractorBtn">Отмена</button>
+                <button class="btn btn-primary" id="saveContractorBtn">Сохранить</button>
             </div>
         </div>
+    </div>
 
-        <!-- Панель дашборда (скрыта по умолчанию) -->
-        <div id="dashboardPanel" style="display: none;">
-            <!-- Шапка дашборда -->
-            <div class="dashboard-header">
-                <button class="btn btn-secondary" id="backToReportsBtn">
-                    <i class="fas fa-arrow-left"></i> Назад к отчётам
-                </button>
-                <h2 id="dashboardTitle">Дебиторка — Динамика ПДЗ</h2>
-                <button class="btn btn-primary" id="buildDashboardBtn">
-                    <i class="fas fa-sync-alt"></i> Сформировать
-                </button>
+    <!-- Модальное окно: подтверждение удаления -->
+    <div class="modal-overlay" id="confirmDeleteModal" style="display: none;">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h3>Подтверждение</h3>
+                <button class="modal-close" id="closeConfirmDeleteModal">&times;</button>
             </div>
-
-            <!-- Фильтры -->
-            <div class="dashboard-filters">
-                <div class="filter-group">
-                    <label>Период с:</label>
-                    <input type="date" id="dashFromDate">
-                </div>
-                <div class="filter-group">
-                    <label>по:</label>
-                    <input type="date" id="dashToDate">
-                </div>
-                <div class="filter-group">
-                    <label>Филиал (ДТ):</label>
-                    <select id="dashFilialSelect">
-                        <option value="">— Все филиалы —</option>
-                    </select>
-                </div>
-                <div class="filter-group">
-                    <label>Контрагент:</label>
-                    <select id="dashCounterpartySelect">
-                        <option value="">— Все контрагенты —</option>
-                    </select>
-                </div>
+            <div class="modal-body">
+                <p>Вы уверены, что хотите удалить этого контрагента из библиотеки?</p>
+                <input type="hidden" id="deleteContractorId" value="">
             </div>
-
-            <!-- Карточки сводки -->
-            <div class="summary-cards" id="dashboardSummaryCards">
-                <div class="summary-card">
-                    <div class="summary-icon summary-icon-blue">
-                        <i class="fas fa-calendar-check"></i>
-                    </div>
-                    <div class="summary-info">
-                        <div class="summary-label">Сверок за период</div>
-                        <div class="summary-value" id="dashSwipeCount">0</div>
-                    </div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-icon summary-icon-green">
-                        <i class="fas fa-arrow-down"></i>
-                    </div>
-                    <div class="summary-info">
-                        <div class="summary-label">Мин. ПДЗ</div>
-                        <div class="summary-value" id="dashMinOverdue">0 ₽</div>
-                    </div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-icon summary-icon-orange">
-                        <i class="fas fa-arrow-up"></i>
-                    </div>
-                    <div class="summary-info">
-                        <div class="summary-label">Макс. ПДЗ</div>
-                        <div class="summary-value" id="dashMaxOverdue">0 ₽</div>
-                    </div>
-                </div>
-                <div class="summary-card">
-                    <div class="summary-icon summary-icon-purple">
-                        <i class="fas fa-chart-line"></i>
-                    </div>
-                    <div class="summary-info">
-                        <div class="summary-label">Средняя ПДЗ</div>
-                        <div class="summary-value" id="dashAvgOverdue">0 ₽</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- График динамики -->
-            <div class="chart-container">
-                <h3>Динамика общей ПДЗ</h3>
-                <canvas id="overdueTrendChart"></canvas>
-            </div>
-
-            <!-- График по филиалам -->
-            <div class="chart-container">
-                <h3>Сравнение филиалов</h3>
-                <canvas id="filialComparisonChart"></canvas>
-            </div>
-
-            <!-- График по контрагентам -->
-            <div class="chart-container">
-                <h3>Динамика по контрагентам</h3>
-                <canvas id="counterpartyTrendChart"></canvas>
-            </div>
-
-            <!-- Таблица истории -->
-            <div class="table-container" style="margin-top: 24px;">
-                <h3 style="padding: 16px 16px 8px; margin: 0; font-size: 15px; font-weight: 600;">История сверок</h3>
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Дата</th>
-                            <th>Общая ПДЗ</th>
-                            <th>Общая ДЗ</th>
-                            <th>Филиалов</th>
-                            <th>Контрагентов</th>
-                        </tr>
-                    </thead>
-                    <tbody id="swipeHistoryBody">
-                        <tr class="empty-row">
-                            <td colspan="5">Нажмите «Сформировать» для загрузки данных</td>
-                        </tr>
-                    </tbody>
-                </table>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancelDeleteBtn">Отмена</button>
+                <button class="btn btn-danger" id="confirmDeleteBtn">Удалить</button>
             </div>
         </div>
     </div>
 
     <script src="lib/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
     <script src="storage.js"></script>
     <script src="parser.js"></script>
     <script src="receipts-manager.js"></script>
+    <script src="expenses-reconciliation.js"></script>
     <script src="balances-manager.js"></script>
     <script src="debt-reconciliation.js"></script>
     <script src="contractors-library.js"></script>
     <script src="supplier-payments.js"></script>
+    <script src="cashflow-allocator.js"></script>
     <script src="reports-manager.js"></script>
+    <script src="settings-manager.js"></script>
     <script src="app.js"></script>
+    <!-- Модальное окно: редактирование настроек -->
+    <div class="modal-overlay" id="settingsEditModal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="settingsEditModalTitle">Редактировать</h3>
+                <button class="modal-close" id="closeSettingsEditModal">&times;</button>
+            </div>
+            <div class="modal-body" id="settingsEditModalBody">
+                <!-- Динамически заполняется -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancelSettingsEditBtn">Отмена</button>
+                <button class="btn btn-primary" id="saveSettingsEditBtn">Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="tooltipPopup" class="tooltip-popup" style="display:none;"></div>
 </body>
 </html>

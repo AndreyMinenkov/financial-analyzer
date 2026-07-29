@@ -180,7 +180,7 @@ class SupplierPaymentsManager {
 
     // ===== БИБЛИОТЕКА КОНТРАГЕНТОВ =====
     getExplanation(contractorName, fallbackPurpose) {
-        // Ищем в библиотеке
+        // Ищем в библиотеке (синхронно, данные уже должны быть загружены)
         const libraryEntry = this.library.findByContractor(contractorName);
         if (libraryEntry) {
             return libraryEntry.explanation;
@@ -188,11 +188,12 @@ class SupplierPaymentsManager {
 
         // Не нашли — используем назначение платежа и добавляем в библиотеку
         if (fallbackPurpose) {
+            // Асинхронно добавляем (не блокируем построение таблицы)
             this.library.addContractor({
                 name: contractorName,
                 organization: '',
                 explanation: fallbackPurpose
-            });
+            }).catch(e => console.warn('Не удалось добавить контрагента в библиотеку:', e));
             return fallbackPurpose;
         }
 
