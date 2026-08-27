@@ -995,18 +995,74 @@ class DebtReconciliationManager {
         return null;
     }
 
+    // Кэш: индекс строки → контрагент (заполняется buildIndexes)
+    _rowToKontragent = {};
+    // Кэш: индекс строки → филиал
+    _rowToFilial = {};
+    // Кэш: Set индексов документных строк
+    _documentRowSet = null;
+    // Кэш: Set индексов уже обработанных строк (для collectSubdivisionData)
+    _processedRowsSet = null;
+    // Флаг: collectSubdivisionData уже вызывался с fromFilialRows=true
+    _subdivisionCollected = false;
+
+    // Предварительная индексация debtData (один проход O(N))
+    buildIndexes() {
+        const docKeywords = [
+            'Акт', 'Реализация', 'Корректировка', 'Поступление',
+            'Взаимозачет', 'Взаимозачёт', 'Списание', 'УПД', 'Счет-фактура',
+            'Товарная накладная', 'ТОРГ-12', 'Универсальный передаточный'
+        ];
+
+        this._rowToKontragent = {};
+        this._rowToFilial = {};
+        this._documentRowSet = new Set();
+        this._processedRowsSet = new Set();
+        this._subdivisionCollected = false;
+
+        let currentFilial = null;
+        let currentKontragent = null;
+
+        for (let i = 0; i < this.debtData.length; i++) {
+            const row = this.debtData[i];
+            if (!row || row.length === 0) continue;
+
+            const cellValue = row[0];
+            if (!cellValue) continue;
+
+            const strVal = String(cellValue).trim();
+
+            if (strVal.startsWith('ДТ ')) {
+                currentFilial = strVal;
+                currentKontragent = null;
+                this._rowToFilial[i] = currentFilial;
+            } else if (docKeywords.some(kw => strVal.includes(kw))) {
+                this._documentRowSet.add(i);
+                this._rowToKontragent[i] = currentKontragent;
+                this._rowToFilial[i] = currentFilial;
+            } else if (strVal.startsWith('Договор') || strVal.startsWith('договор')) {
+                // строка договора — пропускаем
+            } else if (strVal.length > 2 && !/\d/.test(strVal[0])) {
+                currentKontragent = strVal;
+            }
+        }
+    }
+
     reconcile() {
         console.log('Начало сверки...');
         
         // ВАЖНО: Очистка данных перед новой сверкой, чтобы избежать дублирования
         this.currentSubdivisionData = {};
         this.processedDocuments = [];
+        this._subdivisionCollected = false;
         
         this.stats = {
             totalDocuments: 0,
             foundDocuments: 0,
             updatedDocuments: 0,
-            errors: []
+            errors: [],
+            totalDebt: 0,
+            totalOverdue: 0
         };
 
         if (this.debtData.length === 0) {
@@ -1015,6 +1071,9 @@ class DebtReconciliationManager {
                 message: 'Не загружен реестр ДЗ'
             };
         }
+
+        // Предварительная индексация (один проход O(N))
+        this.buildIndexes();
 
         // Создаем карту документов из файла 2 (только те, у которых есть дата)
         const receiptsMap = new Map();
@@ -1026,89 +1085,65 @@ class DebtReconciliationManager {
         console.log('Целевые контрагенты:', this.TARGET_CONTRAGENTS);
 
         const today = this.currentDate;
-        const self = this;
+        let totalDebtSum = 0, totalOverdueSum = 0;
 
-        // Проходим по всем строкам файла 1 и ищем документы
-        for (let i = 0; i < this.debtData.length; i++) {
+        // Проходим только по документным строкам (через кэш)
+        for (const i of this._documentRowSet) {
             const row = this.debtData[i];
-            if (!row || row.length === 0) continue;
+            this.stats.totalDocuments++;
 
-            if (this.isDocumentRow(row)) {
-                this.stats.totalDocuments++;
+            const docName = String(row[this.COLUMNS.DOCUMENT_NAME] || '').trim();
 
-                const docName = String(row[this.COLUMNS.DOCUMENT_NAME] || '').trim();
+            // Получаем контрагента из кэша O(1)
+            const kontragent = this._rowToKontragent[i];
+            
+            if (!kontragent) continue;
 
-                // Находим контрагента для этого документа
-                const kontragent = this.findKontragentForRow(i);
-                
-                // Проверяем, является ли контрагент целевым
-                // Если контрагент не найден (например, документ висит прямо на филиале) - считаем его целевым?
-                // По логике, если контрагент не определен, документ обрабатывать не нужно
-                if (!kontragent) {
-                    console.log(`Пропущен (контрагент не найден): ${docName}`);
-                    continue;
-                }
+            // Проверяем, входит ли контрагент в целевой список
+            const isTargetKontragent = this.TARGET_CONTRAGENTS.some(target =>
+                kontragent.includes(target)
+            );
+            if (!isTargetKontragent) continue;
 
-                // Проверяем, входит ли контрагент в целевой список
-                const isTargetKontragent = this.TARGET_CONTRAGENTS.some(target =>
-                    kontragent.includes(target)
-                );
+            // Ищем документ в карте поступлений
+            const receiptItem = receiptsMap.get(docName);
 
-                // Если контрагент не в списке целевых - пропускаем документ
-                if (!isTargetKontragent) {
-                    console.log(`Пропущен (контрагент ${kontragent} не в списке): ${docName}`);
-                    continue;
-                }
+            let expectedDate = null;
+            let hasDate = false;
 
-                console.log(`\nОбработка документа: ${docName}`);
-                console.log(`  Контрагент: ${kontragent}`);
+            if (receiptItem) {
+                expectedDate = receiptItem.expectedDate;
+                hasDate = true;
+            }
 
-                // Ищем документ в карте поступлений
-                const receiptItem = receiptsMap.get(docName);
+            this.stats.foundDocuments++;
 
-                let expectedDate = null;
-                let hasDate = false;
+            const debtAmount = this.parseExcelNumber(row[this.COLUMNS.DEBT_AMOUNT] || 0);
+            const overdueVal = this.parseExcelNumber(row[this.COLUMNS.OVERDUE] || 0);
+            totalDebtSum += debtAmount;
 
-                if (receiptItem) {
-                    expectedDate = receiptItem.expectedDate;
-                    hasDate = true;
-                    console.log(`  Найден в файле поступлений с датой: ${this.formatDate(expectedDate)}`);
-                } else {
-                    console.log(`  Не найден в файле поступлений - документ будет считаться НЕ ПРОСРОЧЕННЫМ`);
-                }
-
-                this.stats.foundDocuments++;
-
-                const debtAmount = this.parseExcelNumber(row[this.COLUMNS.DEBT_AMOUNT] || 0);
-                console.log(`  Сумма долга: ${debtAmount}`);
-
-                // ✅ ИЗМЕНЕНИЕ: Обновляем ВСЕГДА для целевых контрагентов
-                // Если даты нет — документ считается НЕ ПРОСРОЧЕННЫМ
-                if (debtAmount > 0) {
-                    const updated = this.updateDocumentRow(i, debtAmount, expectedDate, today, hasDate);
-                    if (updated) {
-                        this.stats.updatedDocuments++;
-                        this.processedDocuments.push({
-                            documentName: docName,
-                            action: hasDate ? 'Выполнено' : 'Нет даты - не просрочено',
-                            date: expectedDate ? this.formatDate(expectedDate) : null,
-                            amount: debtAmount,
-                            rowIndex: i,
-                            rowNumber: i + 1
-                        });
-                        console.log(`  Документ добавлен в processedDocuments`);
-                    }
-                } else {
-                    console.log(`  Документ пропущен (сумма долга = 0)`);
+            if (debtAmount > 0) {
+                const updated = this.updateDocumentRow(i, debtAmount, expectedDate, today, hasDate);
+                if (updated) {
+                    this.stats.updatedDocuments++;
+                    this.processedDocuments.push({
+                        documentName: docName,
+                        action: hasDate ? 'Выполнено' : 'Нет даты - не просрочено',
+                        date: expectedDate ? this.formatDate(expectedDate) : null,
+                        amount: debtAmount,
+                        rowIndex: i,
+                        rowNumber: i + 1
+                    });
                 }
             }
         }
 
+        this.stats.totalDebt = Math.round(totalDebtSum * 100) / 100;
+
         console.log('\nСверка завершена. Найдено документов целевых контрагентов:', this.stats.foundDocuments, 'Обновлено:', this.stats.updatedDocuments);
         console.log('processedDocuments содержит', this.processedDocuments.length, 'записей');
 
-        // ВАЖНО: Принудительно пересобираем данные по филиалам из ОБНОВЛЕННОГО debtData
-        // Используем режим fromFilialRows = true для получения данных из строк филиалов
+        // Принудительно пересобираем данные по филиалам из ОБНОВЛЕННОГО debtData
         this.collectSubdivisionData(true);
 
         return {
@@ -1213,6 +1248,39 @@ class DebtReconciliationManager {
         return changed;
     }
 
+    _prepareSummaryData() {
+        const previousDayInfo = this.getPreviousDayData();
+        const totalDebt = this.stats.totalDebt || 0;
+        let totalOverdue = 0;
+        for (const filial in this.currentSubdivisionData) {
+            totalOverdue += this.currentSubdivisionData[filial];
+        }
+        totalOverdue = Math.round(totalOverdue * 100) / 100;
+
+        return {
+            updatedDocuments: this.processedDocuments,
+            previousDayData: previousDayInfo.data,
+            currentDayData: this.currentSubdivisionData,
+            currentDate: this.formatDate(this.currentDate),
+            previousDate: previousDayInfo.date || 'предыдущий рабочий день',
+            summaryDT: {
+                totalDebt: totalDebt,
+                totalOverdue: totalOverdue,
+                legal: this.summaryDT.legal,
+                notRecoverable: this.summaryDT.notRecoverable,
+                recoverable: this.summaryDT.recoverable
+            },
+            summarySIUAT: {
+                totalDebt: this.summarySIUAT.totalDebt || 0,
+                totalOverdue: this.summarySIUAT.totalOverdue || 0,
+                legal: this.summarySIUAT.legal,
+                notRecoverable: this.summarySIUAT.notRecoverable,
+                recoverable: this.summarySIUAT.recoverable
+            },
+            siUatFileName: this.siUatFileName || ''
+        };
+    }
+
     async exportToExcel() {
         console.log('=== ОТПРАВКА НА СЕРВЕР ===');
         console.log('Количество документов для отправки:', this.processedDocuments.length);
@@ -1222,10 +1290,12 @@ class DebtReconciliationManager {
             return { success: false, message: 'Нет данных для экспорта' };
         }
 
-        // ВАЖНО: Принудительно пересобираем данные по филиалам из ТЕКУЩЕГО debtData
-        // Это гарантирует, что currentSubdivisionData будет содержать актуальные данные из файла
-        console.log('ПРИНУДИТЕЛЬНЫЙ ПЕРЕСБОР данных по филиалам из debtData...');
-        this.collectSubdivisionData(true);
+        // Используем кэшированные данные из reconcile(), если ещё не собраны — собираем
+        if (!this._subdivisionCollected) {
+            console.log('ПРИНУДИТЕЛЬНЫЙ ПЕРЕСБОР данных по филиалам из debtData...');
+            this.collectSubdivisionData(true);
+            this._subdivisionCollected = true;
+        }
 
         // Проверяем, что данные собраны
         if (Object.keys(this.currentSubdivisionData).length === 0) {
@@ -1236,57 +1306,11 @@ class DebtReconciliationManager {
         console.log('=== ДАННЫЕ ДЛЯ ОТПРАВКИ НА СЕРВЕР ===');
         console.log('currentDayData (из debtData, колонка O):', JSON.stringify(this.currentSubdivisionData));
 
-        // Получаем данные предыдущего дня из localStorage (синхронно для формирования отчёта)
-        const previousDayInfo = this.getPreviousDayData();
-        console.log('previousDayData (из localStorage):', JSON.stringify(previousDayInfo.data));
-
-        // Рассчитываем общие суммы для сводки ДТ
-        let totalDebt = 0;
-        let totalOverdue = 0;
-        for (let i = 0; i < this.debtData.length; i++) {
-            const row = this.debtData[i];
-            if (!row) continue;
-            if (this.isDocumentRow(row)) {
-                totalDebt += this.parseExcelNumber(row[this.COLUMNS.DEBT_AMOUNT] || 0);
-                totalOverdue += this.parseExcelNumber(row[this.COLUMNS.OVERDUE] || 0);
-            }
-        }
-        totalDebt = Math.round(totalDebt * 100) / 100;
-        totalOverdue = Math.round(totalOverdue * 100) / 100;
-
         try {
             const formData = new FormData();
             formData.append('file', this.debtFile);
 
-            // ✅ ИЗМЕНЕНИЕ: Инвертированная логика динамики
-            // Уменьшение задолженности = положительное число (зеленый)
-            // Увеличение задолженности = отрицательное число (красный)
-            const summaryData = {
-                updatedDocuments: this.processedDocuments,
-                // Данные для таблицы динамики
-                previousDayData: previousDayInfo.data,
-                currentDayData: this.currentSubdivisionData,  // ВАЖНО: это данные из debtData, а не из localStorage
-                currentDate: this.formatDate(this.currentDate),
-                previousDate: previousDayInfo.date || 'предыдущий рабочий день',
-                // Свод задолженности ДТ
-                summaryDT: {
-                    totalDebt: totalDebt,
-                    totalOverdue: totalOverdue,
-                    legal: this.summaryDT.legal,
-                    notRecoverable: this.summaryDT.notRecoverable,
-                    recoverable: this.summaryDT.recoverable
-                },
-                // Свод задолженности СИ УАТ
-                summarySIUAT: {
-                    totalDebt: this.summarySIUAT.totalDebt || 0,
-                    totalOverdue: this.summarySIUAT.totalOverdue || 0,
-                    legal: this.summarySIUAT.legal,
-                    notRecoverable: this.summarySIUAT.notRecoverable,
-                    recoverable: this.summarySIUAT.recoverable
-                },
-                // Метаданные файла СИ УАТ
-                siUatFileName: this.siUatFileName || ''
-            };
+            const summaryData = this._prepareSummaryData();
 
             // Если файл СИ УАТ загружен — добавляем его
             if (this.siUatFile) {
@@ -1423,6 +1447,458 @@ class DebtReconciliationManager {
                 success: false,
                 message: 'Ошибка при сохранении: ' + error.message
             };
+        }
+    }
+
+    // ============================================================
+    // ОТПРАВКА ПО ПОЧТЕ (формирование .eml писем)
+    // ============================================================
+
+    formatDateDDMMYYYY(date) {
+        if (!date) return '';
+        const d = new Date(date);
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return day + '.' + month + '.' + year;
+    }
+
+    _getEmailRecipients() {
+        return {
+            email1: ['Nikiforova.y@s-int.ru', 'Gulin.d@s-int.ru', 'krm@s-int.ru', 'kuzmina.e2@s-int.ru'],
+            email1cc: [],
+            email2: [
+                'voronkov.a@s-int.ru', 'Kirilenko.a@s-int.ru', 'Matveenko.p@s-int.ru',
+                'Novak.a@s-int.ru', 'Perfiliev.v@s-int.ru', 'skomorohov.s@s-int.ru',
+                'Nasibullin.n@s-int.ru', 'Tselovalnikov.V@s-int.ru', 'chernov.s@s-int.ru',
+                'doroshenko.r@s-int.ru', 'Khairova.m@s-int.ru', 'Ariamkin.s@s-int.ru',
+                'Filippov.E@s-int.ru', 'Smetankin.A@s-int.ru', 'Leonteva.n@s-int.ru',
+                'Abradushkina.L@s-int.ru', 'Lunin.s@s-int.ru', 'Nurgaleyev.A@s-int.ru',
+                'Malakhov.d@s-int.ru', 'Kotovchikov.v@s-int.ru', 'Trufanov.e@s-int.ru',
+                'Pobortseva@s-int.ru', 'Mokrinskii.A@s-int.ru'
+            ],
+            email2cc: ['brykova.o@s-int.ru'],
+            email3: [
+                'Novikova.g@s-int.ru', 'Reshetnikov.d@s-int.ru', 'batyreva.d@s-int.ru',
+                'Panarin.s@s-int.ru', 'Yanova.v@s-int.ru', 'Kushnareva.a@s-int.ru',
+                'Asipovich.i@s-int.ru', 'Senmez.a@s-int.ru', 'Kirillova.av@s-int.ru',
+                'anarkulova.e@s-int.ru'
+            ],
+            email3cc: []
+        };
+    }
+
+    _getEmailSignature() {
+        return [
+            'С уважением,',
+            'Миненков Андрей Юрьевич',
+            'Ведущий специалист',
+            'Финансовый отдел',
+            'Управляющая компания',
+            '',
+            'ул. Кржижановского, д. 14, к. 3',
+            'г. Москва, 117218, Россия',
+            'тел.: +7 (495) 786-95-95,,1503',
+            'Minenkov.a@s-int.ru',
+            'www.s-int.ru'
+        ];
+    }
+
+    _escapeHtml(str) {
+        return String(str == null ? '' : str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    _formatEmailAmount(value) {
+        const n = Number(value);
+        if (isNaN(n)) return '0,00';
+        return new Intl.NumberFormat('ru-RU', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(n);
+    }
+
+    _formatDateDisplayDDMMYYYY(isoDate) {
+        if (!isoDate) return '';
+        if (isoDate === 'предыдущий рабочий день') return isoDate;
+        const m = String(isoDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (m) return m[3] + '.' + m[2] + '.' + m[1];
+        return isoDate;
+    }
+
+    _renderSummaryTableHtml(title, rows) {
+        let html = '<p style="font-weight:bold; margin:16px 0 4px 0;">' + this._escapeHtml(title) + '</p>';
+        html += '<table style="border-collapse:collapse; border:1px solid #999999; font-family:Arial, sans-serif; font-size:13px;">';
+        (rows || []).forEach(row => {
+            const isPdz = /ПДЗ/i.test(String(row.label || ''));
+            const colorStyle = isPdz ? 'color:#ff0000;' : '';
+            html += '<tr>';
+            html += '<td style="border:1px solid #999999; padding:4px 8px;' + colorStyle + '">' + this._escapeHtml(row.label) + '</td>';
+            html += '<td style="border:1px solid #999999; padding:4px 8px; text-align:right; white-space:nowrap;' + colorStyle + '">' + this._formatEmailAmount(row.value) + '</td>';
+            html += '</tr>';
+        });
+        html += '</table>';
+        return html;
+    }
+
+    _renderDynamicsTableHtml(emailData) {
+        const dateFmt = this._formatDateDisplayDDMMYYYY(emailData.currentDate);
+        const prevFmt = this._formatDateDisplayDDMMYYYY(emailData.previousDate);
+        let html = '<p style="font-weight:bold; margin:16px 0 4px 0;">Динамика по подразделениям</p>';
+        html += '<table style="border-collapse:collapse; border:1px solid #999999; font-family:Arial, sans-serif; font-size:13px;">';
+        html += '<tr>';
+        html += '<th style="border:1px solid #999999; padding:4px 8px; background:#f0f0f0; text-align:left;">Подразделение</th>';
+        html += '<th style="border:1px solid #999999; padding:4px 8px; background:#f0f0f0; text-align:right;">' + this._escapeHtml(dateFmt) + '</th>';
+        html += '<th style="border:1px solid #999999; padding:4px 8px; background:#f0f0f0; text-align:right;">' + this._escapeHtml(prevFmt) + '</th>';
+        html += '<th style="border:1px solid #999999; padding:4px 8px; background:#f0f0f0; text-align:right;">Динамика</th>';
+        html += '</tr>';
+        (emailData.dynamics || []).forEach(row => {
+            const delta = Number(row.delta) || 0;
+            let deltaStyle = '';
+            if (delta > 0) deltaStyle = 'color:#008000;';
+            else if (delta < 0) deltaStyle = 'color:#ff0000;';
+            html += '<tr>';
+            html += '<td style="border:1px solid #999999; padding:4px 8px;">' + this._escapeHtml(row.name) + '</td>';
+            html += '<td style="border:1px solid #999999; padding:4px 8px; text-align:right; white-space:nowrap;">' + this._formatEmailAmount(row.current) + '</td>';
+            html += '<td style="border:1px solid #999999; padding:4px 8px; text-align:right; white-space:nowrap;">' + this._formatEmailAmount(row.previous) + '</td>';
+            html += '<td style="border:1px solid #999999; padding:4px 8px; text-align:right; white-space:nowrap;' + deltaStyle + '">' + this._formatEmailAmount(row.delta) + '</td>';
+            html += '</tr>';
+        });
+        if (emailData.dynamicsTotal) {
+            const t = emailData.dynamicsTotal;
+            html += '<tr>';
+            html += '<td style="border:1px solid #999999; padding:4px 8px; font-weight:bold;">Общий итог</td>';
+            html += '<td style="border:1px solid #999999; padding:4px 8px; text-align:right; font-weight:bold; white-space:nowrap;">' + this._formatEmailAmount(t.current) + '</td>';
+            html += '<td style="border:1px solid #999999; padding:4px 8px; text-align:right; font-weight:bold; white-space:nowrap;">' + this._formatEmailAmount(t.previous) + '</td>';
+            html += '<td style="border:1px solid #999999; padding:4px 8px; text-align:right; font-weight:bold; white-space:nowrap;">' + this._formatEmailAmount(t.delta) + '</td>';
+            html += '</tr>';
+        }
+        html += '</table>';
+        return html;
+    }
+
+    _renderSummaryTableText(title, rows) {
+        const lines = [title];
+        (rows || []).forEach(row => {
+            lines.push(row.label + ': ' + this._formatEmailAmount(row.value));
+        });
+        return lines.join('\n');
+    }
+
+    _renderDynamicsTableText(emailData) {
+        const lines = ['Динамика по подразделениям'];
+        lines.push('Подразделение | ' + this._formatDateDisplayDDMMYYYY(emailData.currentDate) + ' | ' + this._formatDateDisplayDDMMYYYY(emailData.previousDate) + ' | Динамика');
+        (emailData.dynamics || []).forEach(row => {
+            lines.push(row.name + ' | ' + this._formatEmailAmount(row.current) + ' | ' + this._formatEmailAmount(row.previous) + ' | ' + this._formatEmailAmount(row.delta));
+        });
+        if (emailData.dynamicsTotal) {
+            const t = emailData.dynamicsTotal;
+            lines.push('Общий итог | ' + this._formatEmailAmount(t.current) + ' | ' + this._formatEmailAmount(t.previous) + ' | ' + this._formatEmailAmount(t.delta));
+        }
+        return lines.join('\n');
+    }
+
+    _renderSiuatSheet1TableHtml(emailData) {
+        const grid = emailData.siuatSheet1 || [];
+        if (!grid.length) return '';
+        const firstRow = grid[0] || [];
+        const firstIsTitle = firstRow.length > 0 && firstRow[0] !== '' && firstRow[0] != null && firstRow.slice(1).every(c => c === '' || c == null);
+        let html = '';
+        if (!firstIsTitle) {
+            html += '<p style="font-weight:bold; margin:16px 0 4px 0;">Сводная таблица СИ УАТ (Лист1)</p>';
+        }
+        html += '<table style="border-collapse:collapse; border:1px solid #999999; font-family:Arial, sans-serif; font-size:13px;">';
+        grid.forEach((row, idx) => {
+            if (idx === 0 && firstIsTitle) {
+                html += '<tr><td colspan="4" style="border:1px solid #999999; padding:4px 8px; font-weight:bold; background:#f0f0f0;">' + this._escapeHtml(String(firstRow[0])) + '</td></tr>';
+                return;
+            }
+            const isHeader = (idx === 0);
+            html += '<tr>';
+            row.forEach(cell => {
+                const isNum = (typeof cell === 'number');
+                const display = isNum ? this._formatEmailAmount(cell) : this._escapeHtml(cell == null ? '' : String(cell));
+                const tag = isHeader ? 'th' : 'td';
+                const style = 'border:1px solid #999999; padding:4px 8px; text-align:' + (isNum ? 'right' : 'left') + '; white-space:nowrap;' + (isHeader ? 'background:#f0f0f0; font-weight:bold;' : '');
+                html += '<' + tag + ' style="' + style + '">' + display + '</' + tag + '>';
+            });
+            html += '</tr>';
+        });
+        html += '</table>';
+        return html;
+    }
+
+    _renderSiuatSheet1TableText(emailData) {
+        const grid = emailData.siuatSheet1 || [];
+        if (!grid.length) return '';
+        const lines = ['Сводная таблица СИ УАТ (Лист1)'];
+        grid.forEach(row => {
+            lines.push(row.map(cell => {
+                if (typeof cell === 'number') return this._formatEmailAmount(cell);
+                return cell == null ? '' : String(cell);
+            }).join(' | '));
+        });
+        return lines.join('\n');
+    }
+
+    _buildEmailBodyHtml(emailData, dateDDMMYYYY, tableTypes) {
+        const signature = this._getEmailSignature();
+        const sigHtml = signature.map(l => (l === '' ? '<br>' : this._escapeHtml(l) + '<br>')).join('');
+        let html = '<div style="font-family:Arial, sans-serif; font-size:13px; color:#000000;">';
+        html += '<p>Добрый день</p>';
+        html += '<p>Отчет по дебиторской задолженности с учётом банковских поступлений за "' + this._escapeHtml(dateDDMMYYYY) + '", , которые увидели в течении дня,</p>';
+        html += '<p>По состоянию на "' + this._escapeHtml(dateDDMMYYYY) + '". общая дебиторская задолженность по Дивизиону Транспорт составляет:</p>';
+
+        tableTypes.forEach(type => {
+            if (type === 'dynamics') {
+                html += this._renderDynamicsTableHtml(emailData);
+            } else if (type === 'summaryDT') {
+                html += this._renderSummaryTableHtml('Свод задолженности ДТ', emailData.summaryDT);
+            } else if (type === 'summarySIUAT') {
+                html += this._renderSummaryTableHtml('Свод задолженности СИ УАТ', emailData.summarySIUAT);
+            } else if (type === 'siuatSheet1') {
+                html += this._renderSiuatSheet1TableHtml(emailData);
+            }
+        });
+
+        html += '<p style="margin-top:24px;">' + sigHtml + '</p>';
+        html += '</div>';
+        return html;
+    }
+
+    _buildEmailBodyText(emailData, dateDDMMYYYY, tableTypes) {
+        const signature = this._getEmailSignature();
+        const lines = [];
+        lines.push('Добрый день');
+        lines.push('Отчет по дебиторской задолженности с учётом банковских поступлений за "' + dateDDMMYYYY + '", , которые увидели в течении дня,');
+        lines.push('По состоянию на "' + dateDDMMYYYY + '". общая дебиторская задолженность по Дивизиону Транспорт составляет:');
+        lines.push('');
+
+        tableTypes.forEach(type => {
+            if (type === 'dynamics') {
+                lines.push(this._renderDynamicsTableText(emailData));
+            } else if (type === 'summaryDT') {
+                lines.push(this._renderSummaryTableText('Свод задолженности ДТ', emailData.summaryDT));
+            } else if (type === 'summarySIUAT') {
+                lines.push(this._renderSummaryTableText('Свод задолженности СИ УАТ', emailData.summarySIUAT));
+            } else if (type === 'siuatSheet1') {
+                lines.push(this._renderSiuatSheet1TableText(emailData));
+            }
+            lines.push('');
+        });
+
+        return lines.concat(signature).join('\n');
+    }
+
+    _b64encodeUtf8(str) {
+        const bytes = new TextEncoder().encode(str);
+        let binary = '';
+        bytes.forEach(b => binary += String.fromCharCode(b));
+        return btoa(binary);
+    }
+
+    _encodeEmailSubject(subject) {
+        return '=?UTF-8?B?' + this._b64encodeUtf8(subject) + '?=';
+    }
+
+    _wrapBase64(str) {
+        let out = '';
+        for (let i = 0; i < str.length; i += 76) {
+            out += str.slice(i, i + 76) + '\r\n';
+        }
+        return out;
+    }
+
+    _rfc2231EncodeFilename(filename) {
+        const bytes = new TextEncoder().encode(filename);
+        let out = "UTF-8''";
+        bytes.forEach(b => {
+            const ch = String.fromCharCode(b);
+            if (/[A-Za-z0-9.~_-]/.test(ch)) {
+                out += ch;
+            } else {
+                out += '%' + b.toString(16).toUpperCase().padStart(2, '0');
+            }
+        });
+        return out;
+    }
+
+    _buildEml({ to, cc, subject, htmlBody, textBody, attachmentBase64, attachmentName, asciiName }) {
+        const mixedBoundary = '----=_FA_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+        const altBoundary = '----=_FA_ALT_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+
+        let eml = '';
+        eml += 'From: minenkov.a@s-int.ru\r\n';
+        eml += 'To: ' + to.join(', ') + '\r\n';
+        if (cc && cc.length) eml += 'Cc: ' + cc.join(', ') + '\r\n';
+        eml += 'Subject: ' + this._encodeEmailSubject(subject) + '\r\n';
+        eml += 'Date: ' + new Date().toUTCString() + '\r\n';
+        eml += 'X-Unsent: 1\r\n';
+        eml += 'X-Mozilla-Status: 0001\r\n';
+        eml += 'X-Mozilla-Status2: 00000000\r\n';
+        eml += 'X-Mozilla-Draft-Info: internal; charset=UTF-8; format=flowed\r\n';
+        eml += 'MIME-Version: 1.0\r\n';
+        eml += 'Content-Type: multipart/mixed; boundary="' + mixedBoundary + '"\r\n';
+        eml += '\r\n';
+
+        // multipart/alternative (text/plain + text/html)
+        eml += '--' + mixedBoundary + '\r\n';
+        eml += 'Content-Type: multipart/alternative; boundary="' + altBoundary + '"\r\n';
+        eml += '\r\n';
+
+        eml += '--' + altBoundary + '\r\n';
+        eml += 'Content-Type: text/plain; charset=UTF-8\r\n';
+        eml += 'Content-Transfer-Encoding: base64\r\n';
+        eml += '\r\n';
+        eml += this._wrapBase64(this._b64encodeUtf8(textBody));
+        eml += '--' + altBoundary + '\r\n';
+        eml += 'Content-Type: text/html; charset=UTF-8\r\n';
+        eml += 'Content-Transfer-Encoding: base64\r\n';
+        eml += '\r\n';
+        eml += this._wrapBase64(this._b64encodeUtf8(htmlBody));
+        eml += '--' + altBoundary + '--\r\n';
+        eml += '\r\n';
+
+        // вложение xlsx
+        eml += '--' + mixedBoundary + '\r\n';
+        eml += 'Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet; name="' + asciiName + '"\r\n';
+        eml += 'Content-Disposition: attachment; filename="' + asciiName + '"; filename*=' + this._rfc2231EncodeFilename(attachmentName) + '\r\n';
+        eml += 'Content-Transfer-Encoding: base64\r\n';
+        eml += '\r\n';
+        eml += this._wrapBase64(attachmentBase64);
+        eml += '--' + mixedBoundary + '--\r\n';
+
+        return eml;
+    }
+
+    _downloadEml(content, filename) {
+        const blob = new Blob([content], { type: 'message/rfc822' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    }
+
+    _blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const base64 = String(reader.result).split(',')[1] || '';
+                resolve(base64);
+            };
+            reader.onerror = () => reject(new Error('Ошибка чтения файла'));
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    async sendToEmail() {
+        console.log('=== ОТПРАВКА ПО ПОЧТЕ ===');
+
+        if (!this.debtFile) {
+            return { success: false, message: 'Нет данных для экспорта. Сначала загрузите реестр ДЗ.' };
+        }
+
+        if (!this._subdivisionCollected) {
+            this.collectSubdivisionData(true);
+            this._subdivisionCollected = true;
+        }
+        if (Object.keys(this.currentSubdivisionData).length === 0) {
+            return { success: false, message: 'Нет данных по подразделениям. Сначала выполните сверку.' };
+        }
+
+        try {
+            const formData = new FormData();
+            formData.append('file', this.debtFile);
+            formData.append('mode', 'email');
+            const summaryData = this._prepareSummaryData();
+            if (this.siUatFile) {
+                formData.append('siUatFile', this.siUatFile);
+            }
+            formData.append('data', JSON.stringify(summaryData));
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 300000);
+
+            const serverResponse = await fetch('http://31.130.155.16:5000/save-excel', {
+                method: 'POST',
+                body: formData,
+                signal: controller.signal
+            }).finally(() => clearTimeout(timeoutId));
+
+            if (!serverResponse.ok) {
+                let errorMessage = 'Ошибка сервера';
+                try {
+                    const errorData = await serverResponse.json();
+                    errorMessage = errorData.error || errorMessage;
+                } catch (e) {
+                    errorMessage = `HTTP ${serverResponse.status}: ${serverResponse.statusText}`;
+                }
+                throw new Error(errorMessage);
+            }
+
+            const blob = await serverResponse.blob();
+
+            const emailDataHeader = serverResponse.headers.get('X-Email-Data');
+            let emailData = null;
+            if (emailDataHeader) {
+                try {
+                    const binary = atob(emailDataHeader);
+                    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+                    const jsonStr = new TextDecoder('utf-8').decode(bytes);
+                    emailData = JSON.parse(jsonStr);
+                } catch (e) {
+                    console.warn('⚠️ Не удалось распарсить заголовок X-Email-Data:', e);
+                }
+            }
+
+            if (!emailData) {
+                return { success: false, message: 'Не удалось получить данные для письма с сервера.' };
+            }
+
+            const attachmentBase64 = await this._blobToBase64(blob);
+            const dateDDMMYYYY = this.formatDateDDMMYYYY(this.currentDate);
+            const attachmentName = 'ДЗ Транспорт ' + dateDDMMYYYY + '.xlsx';
+            const asciiName = 'ДЗ_Транспорт_' + dateDDMMYYYY + '.xlsx';
+            const subject = 'ДЗ Транспорт "' + dateDDMMYYYY + '"';
+
+            const recipients = this._getEmailRecipients();
+            const emails = [
+                { to: recipients.email1, cc: recipients.email1cc, tables: ['summaryDT', 'dynamics', 'summarySIUAT', 'siuatSheet1'] },
+                { to: recipients.email2, cc: recipients.email2cc, tables: ['summaryDT', 'summarySIUAT'] },
+                { to: recipients.email3, cc: recipients.email3cc, tables: ['summaryDT'] }
+            ];
+
+            emails.forEach((email, index) => {
+                const htmlBody = this._buildEmailBodyHtml(emailData, dateDDMMYYYY, email.tables);
+                const textBody = this._buildEmailBodyText(emailData, dateDDMMYYYY, email.tables);
+                const content = this._buildEml({
+                    to: email.to,
+                    cc: email.cc,
+                    subject: subject,
+                    htmlBody: htmlBody,
+                    textBody: textBody,
+                    attachmentBase64: attachmentBase64,
+                    attachmentName: attachmentName,
+                    asciiName: asciiName
+                });
+                const filename = 'Письмо_' + (index + 1) + '_ДЗ_Транспорт_' + dateDDMMYYYY + '.eml';
+                setTimeout(() => this._downloadEml(content, filename), index * 400);
+            });
+
+            return { success: true, message: 'Сформировано 3 письма (.eml). Проверьте загрузки браузера.' };
+        } catch (error) {
+            console.error('Ошибка при отправке по почте:', error);
+            if (error.name === 'AbortError') {
+                return { success: false, message: 'Превышено время ожидания ответа от сервера.' };
+            }
+            return { success: false, message: 'Ошибка при формировании писем: ' + error.message };
         }
     }
 

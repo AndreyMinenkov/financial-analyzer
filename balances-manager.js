@@ -223,11 +223,30 @@ class BalancesManager {
         window.app.showNotification('Проценты рассчитаны', 'success');
     }
 
-    // Мержит депозит из Excel с существующими срочными депозитами
+    // Мержит депозит из Excel с существующими депозитами
+    // Обычные депозиты (без endDate) — суммируются, срочные — сохраняются
     mergeExcelDeposit(account, excelDeposit) {
         const existing = this.storage.getDepositForAccount(account);
         const termOnly = existing.filter(d => d.endDate); // сохраняем срочные
-        termOnly.push({ ...excelDeposit, endDate: null });
+        const regularExisting = existing.find(d => !d.endDate); // ищем существующий обычный депозит
+
+        if (regularExisting) {
+            // Суммируем сумму существующего обычного депозита с новым
+            const totalAmount = (regularExisting.amount || 0) + (excelDeposit.amount || 0);
+            // Средневзвешенная ставка
+            const weightedRate = totalAmount > 0
+                ? ((regularExisting.amount || 0) * (regularExisting.rate || 0) + (excelDeposit.amount || 0) * (excelDeposit.rate || 0)) / totalAmount
+                : (excelDeposit.rate || 0);
+            termOnly.push({
+                amount: totalAmount,
+                rate: weightedRate,
+                startDate: regularExisting.startDate || excelDeposit.startDate || '',
+                endDate: null
+            });
+        } else {
+            termOnly.push({ ...excelDeposit, endDate: null });
+        }
+
         this.storage.setDepositForAccount(account, termOnly);
     }
 
@@ -312,7 +331,22 @@ class BalancesManager {
                     else { const d = new Date(s); if (!isNaN(d.getTime())) startDate = d.toISOString().split('T')[0]; }
                 }
             }
-            if (account && amount > 0 && rate > 0) depositData[account] = { amount, rate, startDate: startDate || new Date().toISOString().split('T')[0], endDate: null };
+            if (account && amount > 0 && rate > 0) {
+                if (depositData[account]) {
+                    // Суммируем несколько строк Excel для одного счёта (длинный + короткий депозит)
+                    const existing = depositData[account];
+                    const totalAmount = existing.amount + amount;
+                    const weightedRate = (existing.amount * existing.rate + amount * rate) / totalAmount;
+                    depositData[account] = {
+                        amount: totalAmount,
+                        rate: weightedRate,
+                        startDate: existing.startDate || startDate || new Date().toISOString().split('T')[0],
+                        endDate: null
+                    };
+                } else {
+                    depositData[account] = { amount, rate, startDate: startDate || new Date().toISOString().split('T')[0], endDate: null };
+                }
+            }
         }
         return depositData;
     }
@@ -336,7 +370,17 @@ class BalancesManager {
                 const account = parts[0].replace(/\s/g, '');
                 const amount = parseFloat(parts[1].replace(',', '.')) || 0;
                 const rate = parseFloat(parts[2].replace(',', '.')) || 0;
-                if (account && amount > 0 && rate > 0) depositData[account] = { amount, rate, startDate: parts[3] || '', endDate: null };
+                if (account && amount > 0 && rate > 0) {
+                    if (depositData[account]) {
+                        // Суммируем несколько строк для одного счёта
+                        const existing = depositData[account];
+                        const totalAmount = existing.amount + amount;
+                        const weightedRate = (existing.amount * existing.rate + amount * rate) / totalAmount;
+                        depositData[account] = { amount: totalAmount, rate: weightedRate, startDate: existing.startDate || parts[3] || '', endDate: null };
+                    } else {
+                        depositData[account] = { amount, rate, startDate: parts[3] || '', endDate: null };
+                    }
+                }
             }
         });
         return depositData;

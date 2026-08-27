@@ -71,7 +71,7 @@ limiter = Limiter(
 # ВАЖНО: expose_headers должен включать 'X-Filial-Data' для передачи данных филиалов
 # ============================================================
 CORS(app,
-     expose_headers=['X-Filial-Data', 'X-Allocation-Summary'],
+     expose_headers=['X-Filial-Data', 'X-Allocation-Summary', 'X-Email-Data'],
      resources={r'/*': {'origins': '*'}})
 
 # ============================================================
@@ -172,60 +172,32 @@ def safe_set_number_format(ws, row, col, value):
     if row <= 13:
         return
     cell = get_cell_to_write(ws, row, col)
-    existing_font = copy(cell.font) if cell.has_style else None
-    existing_fill = copy(cell.fill) if cell.has_style else None
-    existing_border = copy(cell.border) if cell.has_style else None
-    existing_protection = copy(cell.protection) if cell.has_style else None
     cell.value = value
     cell.number_format = '#,##0.00'
     cell.alignment = Alignment(horizontal='right')
-    if existing_font:
-        cell.font = existing_font
-    if existing_fill:
-        cell.fill = existing_fill
-    if existing_border:
-        cell.border = existing_border
-    if existing_protection:
-        cell.protection = existing_protection
 
 def safe_set_value(ws, row, col, value):
     if row <= 13:
         return
     cell = get_cell_to_write(ws, row, col)
-    existing_font = copy(cell.font) if cell.has_style else None
-    existing_fill = copy(cell.fill) if cell.has_style else None
-    existing_border = copy(cell.border) if cell.has_style else None
-    existing_protection = copy(cell.protection) if cell.has_style else None
     cell.value = value
     cell.alignment = Alignment(horizontal='right')
-    if existing_font:
-        cell.font = existing_font
-    if existing_fill:
-        cell.fill = existing_fill
-    if existing_border:
-        cell.border = existing_border
-    if existing_protection:
-        cell.protection = existing_protection
 
 def align_numeric_cells(ws):
     logger.info("Выравнивание числовых ячеек по правому краю...")
+    # Кэшируем merged ranges для O(1) проверки вместо O(N) на каждую ячейку
+    merged_set = set()
+    for merged_range in ws.merged_cells.ranges:
+        for r in range(merged_range.min_row, merged_range.max_row + 1):
+            for c in range(merged_range.min_col, merged_range.max_col + 1):
+                merged_set.add((r, c))
     for row in range(14, ws.max_row + 1):
         for col in NUMERIC_COLUMNS:
+            if (row, col) in merged_set:
+                continue
             cell = ws.cell(row=row, column=col)
-            if cell.value is not None and not is_cell_merged(ws, row, col):
-                existing_font = copy(cell.font) if cell.has_style else None
-                existing_fill = copy(cell.fill) if cell.has_style else None
-                existing_border = copy(cell.border) if cell.has_style else None
-                existing_protection = copy(cell.protection) if cell.has_style else None
+            if cell.value is not None:
                 cell.alignment = Alignment(horizontal='right')
-                if existing_font:
-                    cell.font = existing_font
-                if existing_fill:
-                    cell.fill = existing_fill
-                if existing_border:
-                    cell.border = existing_border
-                if existing_protection:
-                    cell.protection = existing_protection
 
 def get_cell_value(ws, row, col):
     if is_cell_merged(ws, row, col):
@@ -499,8 +471,10 @@ def save_excel():
     try:
         file = request.files['file']
         data = json.loads(request.form['data'])
+        mode = request.form.get('mode', '')
 
         logger.info(f"=== ПОЛУЧЕН ЗАПРОС ===")
+        logger.info(f"Режим: {mode or 'обычный'}")
         logger.info(f"Файл: {file.filename}")
         logger.info(f"Документов для обновления: {len(data['updatedDocuments'])}")
 
@@ -662,6 +636,7 @@ def save_excel():
         siuat_total_debt = 0
         siuat_total_overdue = 0
         siuat_sheet_created = False
+        siuat_sheet1_table = None
 
         logger.info(f"=== ОТЛАДКА СИ УАТ ===")
         logger.info(f"siuat_file: {siuat_file}")
@@ -693,6 +668,14 @@ def save_excel():
                 new_siuat_ws.title = 'Свод ДЗ СИ УАТ'
                 siuat_sheet_created = True
                 logger.info(f"Лист скопирован и переименован в 'Свод ДЗ СИ УАТ'")
+
+                # Извлекаем таблицу из листа 'Лист1' (диапазон A5:D8) для письма
+                try:
+                    siuat_sheet1_table = extract_siuat_sheet1_table(siuat_file_content)
+                    logger.info(f"Таблица из 'Лист1' A5:D8: {len(siuat_sheet1_table)} строк")
+                except Exception as e:
+                    logger.warning(f"Не удалось извлечь таблицу из 'Лист1': {e}")
+                    siuat_sheet1_table = None
 
                 # Закрываем промежуточный workbook для освобождения памяти
                 siuat_wb.close()
@@ -734,6 +717,35 @@ def save_excel():
             logger.error(f"!!! Ошибка создания сводных таблиц: {e}")
             traceback.print_exc()
 
+        email_data_encoded = None
+        if mode == 'email':
+            # Скрываем вкладку 'Сводные таблицы' для почтового файла
+            try:
+                if 'Сводные таблицы' in wb.sheetnames:
+                    wb['Сводные таблицы'].sheet_state = 'hidden'
+                    logger.info("Вкладка 'Сводные таблицы' скрыта (режим email)")
+            except Exception as e:
+                logger.warning(f"Не удалось скрыть вкладку 'Сводные таблицы': {e}")
+
+            # Формируем данные для таблиц письма
+            try:
+                email_data = build_email_data(
+                    data,
+                    current_day_data_from_file,
+                    total_debt_data['totalDebt'],
+                    total_debt_data['totalOverdue'],
+                    siuat_total_debt,
+                    siuat_total_overdue,
+                    siuat_sheet1_table,
+                )
+                email_data_encoded = base64.b64encode(
+                    json.dumps(email_data, ensure_ascii=False).encode('utf-8')
+                ).decode('ascii')
+                logger.info("Данные письма сформированы")
+            except Exception as e:
+                logger.error(f"Ошибка формирования данных письма: {e}")
+                traceback.print_exc()
+
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
@@ -755,6 +767,8 @@ def save_excel():
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         response.headers["X-Filial-Data"] = filial_data_encoded
+        if email_data_encoded:
+            response.headers["X-Email-Data"] = email_data_encoded
 
         return response
 
@@ -926,6 +940,99 @@ def api_allocate_cashflow():
 # ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СВЕРКИ ДЗ
 # ============================================================
+def _cell_to_email_value(value):
+    """Преобразует значение ячейки Excel в JSON-сериализуемое значение для письма."""
+    if value is None:
+        return ''
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if hasattr(value, 'strftime'):
+        return value.strftime('%d.%m.%Y')
+    return str(value)
+
+
+def extract_siuat_sheet1_table(siuat_file_content):
+    """Извлекает таблицу из листа 'Лист1' файла СИ УАТ, диапазон A5:D8.
+
+    Файл загружается с data_only=True, чтобы читать вычисленные значения,
+    а не формулы.
+    """
+    wb = openpyxl.load_workbook(io.BytesIO(siuat_file_content), data_only=True)
+    try:
+        if 'Лист1' not in wb.sheetnames:
+            logger.warning("Лист 'Лист1' не найден в файле СИ УАТ")
+            return []
+        ws = wb['Лист1']
+        table = []
+        for row_idx in range(5, 9):
+            row = []
+            for col_idx in range(1, 5):
+                row.append(_cell_to_email_value(ws.cell(row=row_idx, column=col_idx).value))
+            table.append(row)
+        return table
+    finally:
+        wb.close()
+
+
+def build_email_data(data, current_day_data, total_debt, total_overdue, siuat_total_debt, siuat_total_overdue, siuat_sheet1_table=None):
+    """Формирует структурированные данные таблиц для тела email."""
+    current_date = data.get('currentDate', datetime.now().strftime('%Y-%m-%d'))
+    previous_date = data.get('previousDate', '')
+    previous_day_data = data.get('previousDayData', {})
+    summary_dt = data.get('summaryDT', {})
+
+    def _fmt(v):
+        try:
+            return round(float(v or 0), 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    all_filials = sorted(set(list(current_day_data.keys()) + list(previous_day_data.keys())))
+    dynamics = []
+    total_current = 0.0
+    total_previous = 0.0
+    for filial in all_filials:
+        cv = _fmt(current_day_data.get(filial, 0))
+        pv = _fmt(previous_day_data.get(filial, 0))
+        total_current += cv
+        total_previous += pv
+        dynamics.append({
+            'name': filial,
+            'current': cv,
+            'previous': pv,
+            'delta': round(pv - cv, 2),
+        })
+
+    summary_dt_rows = [
+        {'label': 'общая ДЗ', 'value': _fmt(total_debt)},
+        {'label': 'из них ПДЗ', 'value': _fmt(total_overdue)},
+        {'label': 'в т.ч. Судебная', 'value': _fmt(summary_dt.get('legal', 0))},
+        {'label': 'не подлежащая к взысканию', 'value': _fmt(summary_dt.get('notRecoverable', 0))},
+        {'label': 'подлежащая к взысканию', 'value': _fmt(summary_dt.get('recoverable', 0))},
+    ]
+
+    summary_siuat_rows = [
+        {'label': 'Общая ДЗ', 'value': _fmt(siuat_total_debt)},
+        {'label': 'Из них ПДЗ', 'value': _fmt(siuat_total_overdue)},
+    ]
+
+    return {
+        'currentDate': current_date,
+        'previousDate': previous_date,
+        'dynamics': dynamics,
+        'dynamicsTotal': {
+            'current': round(total_current, 2),
+            'previous': round(total_previous, 2),
+            'delta': round(total_previous - total_current, 2),
+        },
+        'summaryDT': summary_dt_rows,
+        'summarySIUAT': summary_siuat_rows,
+        'siuatSheet1': siuat_sheet1_table or [],
+    }
+
+
 def create_summary_sheet(ws, data, total_debt=0, total_overdue=0, siuat_total_debt=0, siuat_total_overdue=0):
     logger.info("Создание листа 'Сводные таблицы'...")
 

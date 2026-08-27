@@ -275,7 +275,14 @@ def save_swipe_data(swipe_date, filial_data, counterparty_data,
 
         # 3. Сохраняем данные по контрагентам
         cp_rows = []
-        for (filial_name, cp_name), debt in counterparty_data.items():
+        for key, debt in counterparty_data.items():
+            # Ключ может быть кортежем (filial_name, cp_name) или строкой "filial||cp"
+            if isinstance(key, tuple):
+                filial_name, cp_name = key
+            else:
+                parts = str(key).split('||', 1)
+                filial_name = parts[0] if len(parts) > 0 else ''
+                cp_name = parts[1] if len(parts) > 1 else ''
             fixed_filial = fix_encoding(filial_name)
             fixed_cp = fix_encoding(cp_name)
             cp_rows.append((swipe_id, swipe_date, fixed_filial, fixed_cp, float(debt)))

@@ -529,6 +529,11 @@ class App {
             this.exportReconciledFile();
         });
 
+        // Кнопка отправки по почте
+        document.getElementById('sendEmailBtn').addEventListener('click', () => {
+            this.sendEmail();
+        });
+
         // Кнопка очистки
         document.getElementById('clearReconciliationBtn').addEventListener('click', () => {
             this.clearReconciliationData();
@@ -972,6 +977,7 @@ class App {
                 this.showReconciliationLog(this.debtManager.getProcessedLog());
                 document.getElementById('exportReconciledBtn').disabled = false;
                 document.getElementById('saveCurrentDayBtn').disabled = false;
+                document.getElementById('sendEmailBtn').disabled = false;
                 
                 // ✅ ИСПРАВЛЕНИЕ: УБРАЛИ преждевременное сохранение!
                 // Сохранение происходит ТОЛЬКО в exportToExcel() после ответа сервера
@@ -1080,6 +1086,26 @@ class App {
         }
     }
 
+    async sendEmail() {
+        const sendEmailBtn = document.getElementById('sendEmailBtn');
+        this.showLoading();
+        try {
+            sendEmailBtn.disabled = true;
+            const result = await this.debtManager.sendToEmail();
+            if (result.success) {
+                this.showNotification(result.message, 'success');
+            } else {
+                this.showNotification(result.message, 'error');
+            }
+        } catch (error) {
+            console.error('Ошибка при отправке по почте:', error);
+            this.showNotification('Ошибка при формировании писем', 'error');
+        } finally {
+            sendEmailBtn.disabled = false;
+            this.hideLoading();
+        }
+    }
+
     clearReconciliationData() {
         this.debtManager.clearData();
         document.getElementById('debtRegistryFileInfo').innerHTML = 'Файл не выбран';
@@ -1089,6 +1115,7 @@ class App {
         document.getElementById('reconciliationLog').style.display = 'none';
         document.getElementById('exportReconciledBtn').disabled = true;
         document.getElementById('reconcileBtn').disabled = true;
+        document.getElementById('sendEmailBtn').disabled = true;
         document.getElementById('previousDayIndicator').style.display = 'none';
         this.showNotification('Данные очищены', 'info');
     }
